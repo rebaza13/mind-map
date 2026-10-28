@@ -16,10 +16,7 @@ const SYSTEM = (name: string, outline: string) =>
   `You are the assistant inside Mindbloom, a mind-map / to-do app. The user talks to you in plain text and you build and edit their map for them. Respond with a short friendly "reply" and a list of "ops". Keep node titles short (2-6 words). Prefer organised branches with subtasks. Only touch existing nodes when asked. Never delete the root node (the one with parent=none).\n\nOps: {op:"add", id:<parent node id or a ref from an earlier add>, ref:<optional temp name for nesting>, title, notes?}, {op:"rename", id, title}, {op:"done", id, done}, {op:"notes", id, notes}, {op:"delete", id}.\n\nCurrent map "${name}":\n${outline}`
 
 async function gemini(key: string, system: string, history: any[], message: string) {
-  const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent', {
-    method: 'POST',
-    headers: { 'x-goog-api-key': key, 'content-type': 'application/json' },
-    body: JSON.stringify({
+  const body = JSON.stringify({
       systemInstruction: { parts: [{ text: system }] },
       contents: [
         ...history.slice(-10).map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
@@ -50,8 +47,15 @@ async function gemini(key: string, system: string, history: any[], message: stri
           required: ['reply', 'ops'],
         },
       },
-    }),
   })
+  // The main model is sometimes overloaded on the free tier, so fall back to the lite one.
+  let res!: Response
+  for (const model of ['gemini-flash-latest', 'gemini-flash-lite-latest']) {
+    res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: 'POST', headers: { 'x-goog-api-key': key, 'content-type': 'application/json' }, body,
+    })
+    if (res.ok) break
+  }
   if (!res.ok) throw new Error(`Gemini ${res.status}: ${(await res.text()).slice(0, 300)}`)
   const out = await res.json()
   return JSON.parse(out.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}')
