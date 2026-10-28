@@ -20,3 +20,6 @@ export function sessionExpired() {
   const at = Number(localStorage.getItem(KEY))
   return at > 0 && Date.now() - at > WEEK
 }
+
+// Links in emails must always open the hosted site, never whatever address the sender was on (e.g. localhost).
+export const APP_URL = 'https://mindbloom-lemon.vercel.app'

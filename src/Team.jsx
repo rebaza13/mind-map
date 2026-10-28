@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import Avatar from './Avatar'
 import Icon from './Icon'
+import { APP_URL } from './supabase'
 
 // Sidebar workspace picker.
 export function WsSwitch({ workspaces, wsId, onPick, onCreate }) {
@@ -55,7 +56,7 @@ export default function Team({ ws, members, invites, me, online, isOwner, onInvi
     setBusy(false)
     setEmail('')
   }
-  const copy = () => navigator.clipboard.writeText(window.location.origin)
+  const copy = () => navigator.clipboard.writeText(APP_URL)
 
   return (
     <div className="modal" onClick={onClose}>

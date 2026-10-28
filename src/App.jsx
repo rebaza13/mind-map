@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { supabase, clearLogin, markLogin, sessionExpired } from './supabase'
+import { supabase, clearLogin, markLogin, sessionExpired, APP_URL } from './supabase'
 import Login from './Login'
 import MapCanvas from './MapCanvas'
 import TodoView from './TodoView'
@@ -370,7 +370,7 @@ function Workspace({ user }) {
     const { error } = await supabase.from('workspace_invites').insert({ workspace_id: wsId, email })
     if (error) return say(error.code === '23505' ? 'Already invited.' : error.message)
     // The invite row is what grants access; this email carries the sign-in link.
-    const sent = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.origin } })
+    const sent = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: APP_URL } })
     say(sent.error ? `Invite saved, but the email could not be sent (${sent.error.message}). Share the app link instead.` : `Invite email sent to ${email}.`)
     loadMembers()
   }
