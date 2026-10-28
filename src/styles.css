@@ -73,14 +73,7 @@ input:focus, textarea:focus { border-color: var(--accent); }
 /* ---- canvas ---- */
 .canvas {
   flex: 1; position: relative; overflow: hidden; touch-action: none; cursor: grab;
-  background:
-    radial-gradient(circle at 1px 1px, rgba(124, 92, 255, 0.35) 1.5px, transparent 2px) 0 0 / 30px 30px,
-    radial-gradient(circle at 15px 15px, rgba(255, 122, 184, 0.3) 1.5px, transparent 2px) 0 0 / 30px 30px,
-    radial-gradient(45% 55% at 10% 15%, rgba(56, 225, 198, 0.22), transparent 70%),
-    radial-gradient(40% 50% at 90% 20%, rgba(255, 200, 87, 0.22), transparent 70%),
-    radial-gradient(50% 55% at 75% 95%, rgba(255, 122, 184, 0.2), transparent 70%),
-    radial-gradient(45% 50% at 20% 90%, rgba(124, 92, 255, 0.2), transparent 70%),
-    #f8f6ff;
+  background: radial-gradient(rgba(60, 40, 140, 0.18) 1px, transparent 1px) 0 0 / 28px 28px, #fbfaff;
 }
 .canvas:active { cursor: grabbing; }
 .canvas-inner { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
