@@ -8,6 +8,7 @@ export default function MapCanvas({ nodes, pos, sel, onSelect, onMove, onAddChil
   const [view, setView] = useState({ x: 80, y: 0, k: 1 })
   const [drag, setDrag] = useState(null) // {ids, dx, dy}
   const gesture = useRef(null)
+  const pts = useRef(new Map()) // active pointers, for pinch
 
   const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
 
@@ -31,26 +32,66 @@ export default function MapCanvas({ nodes, pos, sel, onSelect, onMove, onAddChil
   }
 
   const firstId = nodes[0]?.id
-  useEffect(fit, [firstId]) // refit when switching maps
+  useEffect(() => { fit() }, [firstId]) // refit when switching maps
 
-  function onWheel(e) {
-    const r = wrap.current.getBoundingClientRect()
-    const mx = e.clientX - r.left, my = e.clientY - r.top
-    const k = Math.min(2.5, Math.max(0.25, view.k * (e.deltaY < 0 ? 1.1 : 0.9)))
-    setView({ k, x: mx - ((mx - view.x) / view.k) * k, y: my - ((my - view.y) / view.k) * k })
+  // Mouse wheel / trackpad pinch zoom. Native listener so we can stop the browser zooming the whole page.
+  useEffect(() => {
+    const el = wrap.current
+    const wheel = (e) => {
+      e.preventDefault()
+      const r = el.getBoundingClientRect()
+      const mx = e.clientX - r.left, my = e.clientY - r.top
+      const f = e.ctrlKey ? Math.exp(-e.deltaY * 0.01) : e.deltaY < 0 ? 1.1 : 0.9
+      setView((v) => {
+        const k = Math.min(2.5, Math.max(0.2, v.k * f))
+        return { k, x: mx - ((mx - v.x) / v.k) * k, y: my - ((my - v.y) / v.k) * k }
+      })
+    }
+    const stop = (e) => e.preventDefault() // iOS Safari page-pinch
+    el.addEventListener('wheel', wheel, { passive: false })
+    el.addEventListener('gesturestart', stop)
+    el.addEventListener('gesturechange', stop)
+    return () => {
+      el.removeEventListener('wheel', wheel)
+      el.removeEventListener('gesturestart', stop)
+      el.removeEventListener('gesturechange', stop)
+    }
+  }, [])
+
+  const two = () => {
+    const [a, b] = [...pts.current.values()]
+    return { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 }
   }
 
   function down(e, node) {
     e.stopPropagation()
     wrap.current.setPointerCapture(e.pointerId)
+    pts.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    if (pts.current.size === 2) { // second finger: switch to pinch-zoom + two-finger pan
+      const t = two()
+      gesture.current = { type: 'pinch', d0: t.d, k0: view.k, vx: view.x, vy: view.y, cx0: t.cx, cy0: t.cy }
+      setDrag(null)
+      return
+    }
+    if (pts.current.size > 2) return
     gesture.current = node
       ? { type: 'node', node, sx: e.clientX, sy: e.clientY, moved: false }
       : { type: 'pan', sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y, moved: false }
   }
 
   function move(e) {
+    if (pts.current.has(e.pointerId)) pts.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
     const g = gesture.current
     if (!g) return
+    if (g.type === 'pinch') {
+      if (pts.current.size < 2) return
+      const t = two(), r = wrap.current.getBoundingClientRect()
+      const k = Math.min(2.5, Math.max(0.2, (g.k0 * t.d) / g.d0))
+      const px = g.cx0 - r.left, py = g.cy0 - r.top // world point under the fingers at the start
+      const wx = (px - g.vx) / g.k0, wy = (py - g.vy) / g.k0
+      setView({ k, x: t.cx - r.left - wx * k, y: t.cy - r.top - wy * k })
+      return
+    }
     const dx = e.clientX - g.sx, dy = e.clientY - g.sy
     if (g.type === 'pan') return (g.moved ||= Math.hypot(dx, dy) > 4), setView((v) => ({ ...v, x: g.vx + dx, y: g.vy + dy }))
     if (!g.moved && Math.hypot(dx, dy) < 5) return
@@ -58,8 +99,13 @@ export default function MapCanvas({ nodes, pos, sel, onSelect, onMove, onAddChil
     setDrag({ ids: new Set([g.node.id, ...descendants(nodes, g.node.id)]), dx: dx / view.k, dy: dy / view.k })
   }
 
-  function up() {
+  function up(e) {
+    pts.current.delete(e.pointerId)
     const g = gesture.current
+    if (g?.type === 'pinch') { // lifting one finger ends the pinch; wait until all fingers are up
+      if (pts.current.size === 0) gesture.current = null
+      return
+    }
     gesture.current = null
     if (!g) return
     if (g.type === 'pan') return g.moved || onSelect(null)
@@ -69,7 +115,7 @@ export default function MapCanvas({ nodes, pos, sel, onSelect, onMove, onAddChil
   }
 
   return (
-    <div className="canvas" ref={wrap} onWheel={onWheel} onPointerDown={(e) => down(e, null)} onPointerMove={move} onPointerUp={up}>
+    <div className="canvas" ref={wrap} onPointerDown={(e) => down(e, null)} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
       <div className="canvas-inner" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})` }}>
         <svg className="links">
           {nodes.filter((n) => n.parent_id && byId.has(n.parent_id)).map((n) => {

@@ -51,6 +51,8 @@ function Workspace({ user }) {
   const [invites, setInvites] = useState([])
   const [online, setOnline] = useState([])
   const [showTeam, setShowTeam] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [installEvt, setInstallEvt] = useState(null)
   const mapRef = useRef(null)
   const selRef = useRef(null)
   const chan = useRef(null)
@@ -61,6 +63,13 @@ function Workspace({ user }) {
 
   const say = (m) => { setToast(m); setTimeout(() => setToast(''), 3500) }
   const fail = (error) => error && say(error.message)
+
+  // "Add to home screen" prompt (Chrome / Android); iOS users use Share > Add to Home Screen.
+  useEffect(() => {
+    const h = (e) => { e.preventDefault(); setInstallEvt(e) }
+    window.addEventListener('beforeinstallprompt', h)
+    return () => window.removeEventListener('beforeinstallprompt', h)
+  }, [])
 
   // ---- workspaces, maps, members --------------------------------------------
   const loadWorkspaces = useCallback(async (prefer) => {
@@ -297,6 +306,15 @@ function Workspace({ user }) {
     setMsgs((m) => [...m, { role: 'assistant', text: data.reply || 'Done.' }])
   }
 
+  // Pasted lists ("- Parent" / "  - child") are built directly; anything else goes to the AI.
+  const chatSend = async (text) => {
+    if (text.includes('\n') || /^[-*•]\s/.test(text)) {
+      setMsgs((m) => [...m, { role: 'user', text: '(pasted outline)' }])
+      await runCommand(text)
+      setMsgs((m) => [...m, { role: 'assistant', text: 'Added it to your map.' }])
+    } else askClaude(text)
+  }
+
   const applyOps = async (ops) => {
     const refs = new Map()
     const rows = []
@@ -401,8 +419,8 @@ function Workspace({ user }) {
   })
 
   return (
-    <div className="app">
-      <aside className="side">
+    <div className={`app ${selected ? 'has-sel' : ''}`}>
+      <aside className={`side ${menuOpen ? 'open' : ''}`}>
         <div className="brand">Mind<span>bloom</span></div>
         <WsSwitch workspaces={workspaces} wsId={wsId} onPick={setWsId} onCreate={createWorkspace} />
 
@@ -418,7 +436,7 @@ function Workspace({ user }) {
                 <input autoFocus defaultValue={m.name} onBlur={(e) => renameMap(m.id, e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') setRenaming(null) }} />
               ) : (
                 <>
-                  <button className="name" onClick={() => setMapId(m.id)} onDoubleClick={() => setRenaming(m.id)} title="Double-click to rename">{m.name}</button>
+                  <button className="name" onClick={() => { setMapId(m.id); setMenuOpen(false) }} onDoubleClick={() => setRenaming(m.id)} title="Double-click to rename">{m.name}</button>
                   <button className="x" title="Rename" onClick={() => setRenaming(m.id)}><Icon name="pen" size={14} /></button>
                   <button className="x del" title="Delete map" onClick={() => setAsk({ title: `Delete “${m.name}”?`, body: 'Every idea and subtask in this map will be gone for good.', label: 'Delete map', onYes: () => deleteMap(m.id) })}><Icon name="trash" size={14} /></button>
                 </>
@@ -427,6 +445,11 @@ function Workspace({ user }) {
           ))}
         </div>
 
+        <div className="export-row">
+          <button className="soft" onClick={() => downloadHtml(maps.find((m) => m.id === mapId)?.name || 'map', nodes, pos)}><Icon name="down" size={15} /> HTML</button>
+          <button className="soft" onClick={() => printPdf(maps.find((m) => m.id === mapId)?.name || 'map', nodes, pos) || say('Allow pop-ups to export PDF.')}><Icon name="down" size={15} /> PDF</button>
+          {installEvt && <button className="soft install" onClick={() => { installEvt.prompt(); setInstallEvt(null) }}><Icon name="plus" size={15} /> Install</button>}
+        </div>
         <div className="me">
           <Avatar name={profile.name} url={profile.avatar} size={36} online />
           <div className="who"><b>{profile.name}</b><small>{user.email}</small></div>
@@ -434,8 +457,11 @@ function Workspace({ user }) {
         </div>
       </aside>
 
+      {menuOpen && <div className="scrim" onClick={() => setMenuOpen(false)} />}
+
       <main className="main">
         <header className="bar">
+          <button className="menu-btn" title="Menu" onClick={() => setMenuOpen(true)}><Icon name="menu" size={20} /></button>
           <h2>{maps.find((m) => m.id === mapId)?.name}</h2>
           <div className="seg">
             <button className={view === 'map' ? 'on' : ''} onClick={() => setView('map')}>Mind map</button>
@@ -445,10 +471,8 @@ function Workspace({ user }) {
             {online.slice(0, 5).map((u) => <Avatar key={u.id} name={u.name} url={u.avatar} size={32} online title={u.id === user.id ? `${u.name} (you)` : `${u.name} is online`} />)}
             {online.length > 5 && <span className="more">+{online.length - 5}</span>}
           </div>
-          <button className="invite-btn" onClick={() => setShowTeam(true)}><Icon name="users" size={16} /> Invite</button>
-          <button className="claude-btn" onClick={() => setChatOpen(!chatOpen)}><Icon name="spark" size={16} /> Ask AI</button>
-          <button className="ghost" onClick={() => downloadHtml(maps.find((m) => m.id === mapId)?.name || 'map', nodes, pos)}><Icon name="down" size={15} /> HTML</button>
-          <button className="ghost" onClick={() => printPdf(maps.find((m) => m.id === mapId)?.name || 'map', nodes, pos) || say('Allow pop-ups to export PDF.')}><Icon name="down" size={15} /> PDF</button>
+          <button className="invite-btn" onClick={() => setShowTeam(true)}><Icon name="users" size={16} /> <span className="lbl">Invite</span></button>
+          <button className="claude-btn" onClick={() => setChatOpen(!chatOpen)}><Icon name="spark" size={16} /> <span className="lbl">Ask AI</span></button>
         </header>
 
         {view === 'map' ? (
@@ -457,8 +481,7 @@ function Workspace({ user }) {
           <TodoView nodes={nodes} sel={sel} onSelect={setSel} onToggle={toggle} onAddChild={addChild} onPatch={patchNode} members={members} viewers={viewers} />
         )}
 
-        {chatOpen && <ClaudeChat msgs={msgs} thinking={thinking} onSend={askClaude} onClose={() => setChatOpen(false)} />}
-        <CommandBar onRun={runCommand} target={selected?.title} />
+        {chatOpen && <ClaudeChat msgs={msgs} thinking={thinking} onSend={chatSend} onClose={() => setChatOpen(false)} />}
       </main>
 
       {selected && (
@@ -534,41 +557,30 @@ function Workspace({ user }) {
   )
 }
 
-function CommandBar({ onRun, target }) {
-  const [text, setText] = useState('')
-  const [copied, setCopied] = useState(false)
-  const submit = () => { onRun(text); setText('') }
-  const copy = () => navigator.clipboard.writeText(AI_PROMPT).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) })
-  return (
-    <div className="cmd">
-      <textarea
-        rows={text.includes('\n') ? 4 : 1}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }}
-        placeholder={`Type or paste text to grow “${target || 'the map'}”  —  Launch: Design, Build, Ship   ·   done Build   ·   Shift+Enter for an outline`}
-      />
-      <button className="copy" type="button" onClick={copy} title="Copy a prompt to give any AI; paste its answer here">{copied ? 'Copied ✓' : 'AI prompt'}</button>
-      <button onClick={submit} disabled={!text.trim()}>Grow</button>
-    </div>
-  )
-}
-
 function ClaudeChat({ msgs, thinking, onSend, onClose }) {
   const [text, setText] = useState('')
+  const [copied, setCopied] = useState(false)
   const end = useRef(null)
-  useEffect(() => end.current?.scrollIntoView({ behavior: 'smooth' }), [msgs, thinking])
-  const send = (e) => { e.preventDefault(); if (!text.trim() || thinking) return; onSend(text.trim()); setText('') }
+  useEffect(() => { end.current?.scrollIntoView({ behavior: 'smooth' }) }, [msgs, thinking])
+  const send = (e) => { e?.preventDefault(); if (!text.trim() || thinking) return; onSend(text.trim()); setText('') }
+  const copy = () => navigator.clipboard.writeText(AI_PROMPT).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) })
   return (
     <div className="chatpanel">
-      <div className="chat-head"><b>✦ AI assistant</b><button onClick={onClose}><Icon name="x" size={16} /></button></div>
+      <div className="chat-head"><b><Icon name="spark" size={15} /> AI assistant</b><button onClick={onClose}><Icon name="x" size={16} /></button></div>
       <div className="chat-body">
-        {!msgs.length && <p className="muted">Tell me what to build or change. “Plan a trip to Japan”, “add a budget branch”, “mark design as done”…</p>}
+        {!msgs.length && (
+          <p className="muted">Tell me what to build or change: “plan a trip to Japan”, “add a budget branch”, “mark design as done”. You can also paste an indented list and I will turn it into a map.</p>
+        )}
         {msgs.map((m, i) => <div key={i} className={`bubble ${m.role}`}>{m.text}</div>)}
         {thinking && <div className="bubble assistant">Thinking…</div>}
         <div ref={end} />
       </div>
-      <form onSubmit={send}><input value={text} onChange={(e) => setText(e.target.value)} placeholder="Ask AI…" /><button disabled={thinking || !text.trim()}>Send</button></form>
+      <button className="prompt-link" type="button" onClick={copy}>{copied ? 'Copied ✓' : 'Copy a prompt for ChatGPT or other AI'}</button>
+      <form onSubmit={send}>
+        <textarea rows={1} value={text} onChange={(e) => setText(e.target.value)} placeholder="Ask AI…"
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) send(e) }} />
+        <button disabled={thinking || !text.trim()}>Send</button>
+      </form>
     </div>
   )
 }

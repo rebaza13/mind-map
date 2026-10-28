@@ -50,12 +50,17 @@ async function gemini(key: string, system: string, history: any[], message: stri
   })
   // The main model is sometimes overloaded on the free tier, so fall back to the lite one.
   let res!: Response
-  for (const model of ['gemini-flash-latest', 'gemini-flash-lite-latest']) {
-    res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-      method: 'POST', headers: { 'x-goog-api-key': key, 'content-type': 'application/json' }, body,
-    })
-    if (res.ok) break
+  outer: for (const model of ['gemini-flash-latest', 'gemini-flash-lite-latest']) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: 'POST', headers: { 'x-goog-api-key': key, 'content-type': 'application/json' }, body,
+      })
+      if (res.ok) break outer
+      if (res.status !== 503 && res.status !== 429) break
+      await new Promise((r) => setTimeout(r, 1200))
+    }
   }
+  if (res.status === 503 || res.status === 429) throw new Error('The free AI is busy right now. Please try again in a minute.')
   if (!res.ok) throw new Error(`Gemini ${res.status}: ${(await res.text()).slice(0, 300)}`)
   const out = await res.json()
   return JSON.parse(out.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}')
