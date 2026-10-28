@@ -3,6 +3,7 @@ import { supabase, clearLogin, markLogin, sessionExpired } from './supabase'
 import Login from './Login'
 import MapCanvas from './MapCanvas'
 import TodoView from './TodoView'
+import { downloadHtml, printPdf } from './exportMap'
 import { PALETTE, descendants, layout, nodeW, parseOutline, pickColor } from './tree'
 
 export default function App() {
@@ -256,6 +257,8 @@ function Workspace() {
             <button className={view === 'map' ? 'on' : ''} onClick={() => setView('map')}>Mind map</button>
             <button className={view === 'todo' ? 'on' : ''} onClick={() => setView('todo')}>To-do</button>
           </div>
+          <button className="ghost" onClick={() => downloadHtml(maps.find((m) => m.id === mapId)?.name || 'map', nodes, pos)}>Export HTML</button>
+          <button className="ghost" onClick={() => printPdf(maps.find((m) => m.id === mapId)?.name || 'map', nodes, pos) || say('Allow pop-ups to export PDF.')}>Export PDF</button>
           <button className="ghost" onClick={deleteMap}>Delete map</button>
         </header>
 
