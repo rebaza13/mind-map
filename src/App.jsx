@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase, clearLogin, markLogin, sessionExpired } from './supabase'
 import Login from './Login'
 import MapCanvas from './MapCanvas'
-import TodoView, { Avatar } from './TodoView'
+import TodoView from './TodoView'
+import Avatar from './Avatar'
+import Team, { WsSwitch } from './Team'
 import Icon from './Icon'
 import { downloadHtml, printPdf } from './exportMap'
 import { PALETTE, descendants, layout, nodeW, parseOutline, pickColor, AI_PROMPT } from './tree'
@@ -26,10 +28,10 @@ export default function App() {
   }, [])
 
   if (session === undefined) return <div className="boot">…</div>
-  return session ? <Workspace /> : <Login />
+  return session ? <Workspace user={session.user} /> : <Login />
 }
 
-function Workspace() {
+function Workspace({ user }) {
   const [maps, setMaps] = useState([])
   const [mapId, setMapId] = useState(null)
   const [nodes, setNodes] = useState([])
@@ -43,27 +45,74 @@ function Workspace() {
   const [renaming, setRenaming] = useState(null)
   const [msgs, setMsgs] = useState([])
   const [thinking, setThinking] = useState(false)
+  const [workspaces, setWorkspaces] = useState([])
+  const [wsId, setWsId] = useState(null)
+  const [members, setMembers] = useState([])
+  const [invites, setInvites] = useState([])
+  const [online, setOnline] = useState([])
+  const [showTeam, setShowTeam] = useState(false)
+  const mapRef = useRef(null)
+  const selRef = useRef(null)
+  const chan = useRef(null)
+  const recent = useRef({}) // node id -> last local edit time, so our own echoes don't overwrite typing
+
+  const meta = user.user_metadata || {}
+  const profile = { id: user.id, name: meta.full_name || meta.name || (user.email || '').split('@')[0], avatar: meta.avatar_url || meta.picture || '' }
 
   const say = (m) => { setToast(m); setTimeout(() => setToast(''), 3500) }
   const fail = (error) => error && say(error.message)
 
-  // ---- loading -----------------------------------------------------------
-  const loadMaps = useCallback(async () => {
-    let { data, error } = await supabase.from('maps').select('*').order('created_at')
+  // ---- workspaces, maps, members --------------------------------------------
+  const loadWorkspaces = useCallback(async (prefer) => {
+    await supabase.rpc('claim_invites') // joins any workspace that invited this email
+    let { data, error } = await supabase.from('workspaces').select('*').order('created_at')
     if (error) return say(error.message)
     if (!data.length) {
-      const { data: m, error: e2 } = await supabase.from('maps').insert({ name: 'My first map' }).select().single()
+      await supabase.rpc('create_workspace', { p_name: 'My workspace' })
+      ;({ data } = await supabase.from('workspaces').select('*').order('created_at'))
+    }
+    setWorkspaces(data)
+    const saved = prefer || localStorage.getItem('mindbloom.ws')
+    setWsId((data.find((w) => w.id === saved) ?? data[0]).id)
+  }, [])
+
+  const loadMembers = useCallback(async () => {
+    if (!wsId) return
+    const [m, i] = await Promise.all([
+      supabase.from('workspace_members').select('*').eq('workspace_id', wsId).order('joined_at'),
+      supabase.from('workspace_invites').select('*').eq('workspace_id', wsId).order('created_at'),
+    ])
+    if (m.data && !m.data.some((x) => x.user_id === user.id)) return loadWorkspaces() // we were removed
+    setMembers(m.data || [])
+    setInvites(i.data || [])
+  }, [wsId, user.id, loadWorkspaces])
+
+  const loadMaps = useCallback(async () => {
+    if (!wsId) return
+    let { data, error } = await supabase.from('maps').select('*').eq('workspace_id', wsId).order('created_at')
+    if (error) return say(error.message)
+    if (!data.length) {
+      const { data: m, error: e2 } = await supabase.from('maps').insert({ name: 'My first map', workspace_id: wsId }).select().single()
       if (e2) return say(e2.message)
       await supabase.from('nodes').insert({ map_id: m.id, title: 'My mind', color: PALETTE[0] })
       data = [m]
     }
     setMaps(data)
-    setMapId((cur) => cur ?? data[0].id)
-  }, [])
+    setMapId(data[0].id)
+  }, [wsId])
+
+  useEffect(() => { loadWorkspaces() }, [loadWorkspaces])
+  useEffect(() => {
+    if (!wsId) return
+    localStorage.setItem('mindbloom.ws', wsId)
+    setMaps([]); setMapId(null); setNodes([]); setSel(null)
+    loadMaps()
+    loadMembers()
+  }, [wsId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    loadMaps()
-  }, [loadMaps])
+    if (mapId && maps.length && !maps.some((m) => m.id === mapId)) setMapId(maps[0].id) // our map was deleted elsewhere
+  }, [maps, mapId])
 
   useEffect(() => {
     if (!mapId) return
@@ -71,17 +120,67 @@ function Workspace() {
     supabase.from('nodes').select('*').eq('map_id', mapId).then(({ data, error }) => (fail(error), setNodes(data || [])))
   }, [mapId])
 
+  mapRef.current = mapId
+  selRef.current = sel
+
+  // ---- live: database changes from teammates ---------------------------------
+  useEffect(() => {
+    if (!wsId) return
+    const ch = supabase.channel(`db:${wsId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'nodes' }, (p) => {
+        if (p.eventType === 'DELETE') return setNodes((ns) => ns.filter((n) => n.id !== p.old.id))
+        const row = p.new
+        if (row.map_id !== mapRef.current) return
+        if (p.eventType === 'UPDATE' && Date.now() - (recent.current[row.id] || 0) < 1500) return
+        setNodes((ns) => (ns.some((n) => n.id === row.id) ? ns.map((n) => (n.id === row.id ? { ...n, ...row } : n)) : [...ns, row]))
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'maps' }, (p) => {
+        if (p.eventType === 'DELETE') return setMaps((ms) => ms.filter((m) => m.id !== p.old.id))
+        if (p.new.workspace_id !== wsId) return
+        setMaps((ms) => (ms.some((m) => m.id === p.new.id) ? ms.map((m) => (m.id === p.new.id ? p.new : m)) : [...ms, p.new]))
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'workspace_members' }, () => loadMembers())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'workspace_invites' }, () => loadMembers())
+      .subscribe()
+    return () => { supabase.removeChannel(ch) }
+  }, [wsId, loadMembers])
+
+  // ---- live: who is here and what they are looking at ---------------------------
+  useEffect(() => {
+    if (!wsId) return
+    const ch = supabase.channel(`presence:${wsId}`, { config: { presence: { key: user.id } } })
+    ch.on('presence', { event: 'sync' }, () => {
+      const st = ch.presenceState()
+      setOnline(Object.entries(st).map(([id, metas]) => ({ id, ...metas[metas.length - 1] })))
+    }).subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        chan.current = ch
+        ch.track({ name: profile.name, avatar: profile.avatar, mapId: mapRef.current, sel: selRef.current })
+      }
+    })
+    return () => { chan.current = null; supabase.removeChannel(ch) }
+  }, [wsId, user.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { chan.current?.track({ name: profile.name, avatar: profile.avatar, mapId, sel }) }, [mapId, sel]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // teammates looking at a node of this map -> {nodeId: [users]}
+  const viewers = useMemo(() => {
+    const v = {}
+    for (const u of online) if (u.id !== user.id && u.mapId === mapId && u.sel) (v[u.sel] ||= []).push(u)
+    return v
+  }, [online, mapId, user.id])
+
   const pos = useMemo(() => layout(nodes), [nodes])
   const selected = nodes.find((n) => n.id === sel)
 
   // ---- node operations (optimistic, then persisted) ----------------------
   const patchNode = (id, patch, { debounce } = {}) => {
+    recent.current[id] = Date.now()
     setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, ...patch } : n)))
     const send = () => supabase.from('nodes').update(patch).eq('id', id).then(({ error }) => fail(error))
     if (!debounce) return send()
     const k = id + Object.keys(patch).join()
     clearTimeout(timers.current[k])
-    timers.current[k] = setTimeout(send, 500)
+    timers.current[k] = setTimeout(() => { recent.current[id] = Date.now(); send() }, 500)
   }
 
   const makeNode = (parentId, title, extra = {}) => {
@@ -134,6 +233,7 @@ function Workspace() {
 
   const moveNodes = (moves) => {
     const m = new Map(moves.map((x) => [x.id, x]))
+    moves.forEach(({ id }) => { recent.current[id] = Date.now() })
     setNodes((ns) => ns.map((n) => (m.has(n.id) ? { ...n, x: m.get(n.id).x, y: m.get(n.id).y } : n)))
     moves.forEach(({ id, x, y }) => supabase.from('nodes').update({ x, y }).eq('id', id).then(({ error }) => fail(error)))
   }
@@ -227,10 +327,10 @@ function Workspace() {
     const name = (newName || '').trim()
     setNewName(null)
     if (!name) return
-    const { data: m, error } = await supabase.from('maps').insert({ name }).select().single()
+    const { data: m, error } = await supabase.from('maps').insert({ name, workspace_id: wsId }).select().single()
     if (error) return fail(error)
     await supabase.from('nodes').insert({ map_id: m.id, title: name, color: PALETTE[0] })
-    setMaps((ms) => [...ms, m])
+    setMaps((ms) => (ms.some((x) => x.id === m.id) ? ms : [...ms, m]))
     setMapId(m.id)
   }
 
@@ -239,7 +339,7 @@ function Workspace() {
     if (error) return fail(error)
     const rest = maps.filter((m) => m.id !== id)
     if (!rest.length) { // deleting the last map leaves a fresh empty one
-      const { data: m } = await supabase.from('maps').insert({ name: 'My first map' }).select().single()
+      const { data: m } = await supabase.from('maps').insert({ name: 'My first map', workspace_id: wsId }).select().single()
       await supabase.from('nodes').insert({ map_id: m.id, title: 'My mind', color: PALETTE[0] })
       setMaps([m]); setMapId(m.id); return
     }
@@ -254,6 +354,40 @@ function Workspace() {
     setMaps((ms) => ms.map((m) => (m.id === id ? { ...m, name: clean } : m)))
     fail((await supabase.from('maps').update({ name: clean }).eq('id', id)).error)
   }
+
+  // ---- workspace actions ---------------------------------------------------------
+  const isOwner = workspaces.find((w) => w.id === wsId)?.owner_id === user.id
+
+  const createWorkspace = async (name) => {
+    const { data, error } = await supabase.rpc('create_workspace', { p_name: name })
+    if (error) return fail(error)
+    loadWorkspaces(data)
+  }
+
+  const invite = async (raw) => {
+    const email = raw.trim().toLowerCase()
+    if (members.some((m) => m.email.toLowerCase() === email)) return say('They are already in this workspace.')
+    const { error } = await supabase.from('workspace_invites').insert({ workspace_id: wsId, email })
+    if (error) return say(error.code === '23505' ? 'Already invited.' : error.message)
+    // The invite row is what grants access; this email carries the sign-in link.
+    const sent = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.origin } })
+    say(sent.error ? `Invite saved, but the email could not be sent (${sent.error.message}). Share the app link instead.` : `Invite email sent to ${email}.`)
+    loadMembers()
+  }
+
+  const revokeInvite = async (id) => { fail((await supabase.from('workspace_invites').delete().eq('id', id)).error); loadMembers() }
+  const removeMember = (m) => setAsk({
+    title: `Remove ${m.name || m.email}?`, body: 'They will lose access to every map in this workspace.', label: 'Remove',
+    onYes: async () => { fail((await supabase.from('workspace_members').delete().eq('workspace_id', wsId).eq('user_id', m.user_id)).error); loadMembers() },
+  })
+  const leaveWorkspace = () => { setShowTeam(false); setAsk({
+    title: 'Leave this workspace?', body: 'You will lose access unless someone invites you again.', label: 'Leave',
+    onYes: async () => { fail((await supabase.from('workspace_members').delete().eq('workspace_id', wsId).eq('user_id', user.id)).error); loadWorkspaces() },
+  }) }
+  const deleteWorkspace = () => { setShowTeam(false); setAsk({
+    title: `Delete “${workspaces.find((w) => w.id === wsId)?.name}”?`, body: 'All maps and tasks inside it are deleted for everyone.', label: 'Delete workspace',
+    onYes: async () => { fail((await supabase.from('workspaces').delete().eq('id', wsId)).error); loadWorkspaces() },
+  }) }
 
   // Keyboard: Tab adds a subtask, Delete removes the selected node.
   useEffect(() => {
@@ -270,6 +404,7 @@ function Workspace() {
     <div className="app">
       <aside className="side">
         <div className="brand">Mind<span>bloom</span></div>
+        <WsSwitch workspaces={workspaces} wsId={wsId} onPick={setWsId} onCreate={createWorkspace} />
 
         <button className="new-map" onClick={() => setNewName('')}><Icon name="plus" size={16} /> New map</button>
         <div className="sec-head"><h3>Your maps</h3></div>
@@ -292,7 +427,11 @@ function Workspace() {
           ))}
         </div>
 
-        <button className="signout" onClick={() => { clearLogin(); supabase.auth.signOut() }}>Sign out</button>
+        <div className="me">
+          <Avatar name={profile.name} url={profile.avatar} size={36} online />
+          <div className="who"><b>{profile.name}</b><small>{user.email}</small></div>
+          <button className="icon-btn" title="Sign out" onClick={() => { clearLogin(); supabase.auth.signOut() }}><Icon name="logout" size={17} /></button>
+        </div>
       </aside>
 
       <main className="main">
@@ -302,15 +441,20 @@ function Workspace() {
             <button className={view === 'map' ? 'on' : ''} onClick={() => setView('map')}>Mind map</button>
             <button className={view === 'todo' ? 'on' : ''} onClick={() => setView('todo')}>To-do</button>
           </div>
+          <div className="presence">
+            {online.slice(0, 5).map((u) => <Avatar key={u.id} name={u.name} url={u.avatar} size={32} online title={u.id === user.id ? `${u.name} (you)` : `${u.name} is online`} />)}
+            {online.length > 5 && <span className="more">+{online.length - 5}</span>}
+          </div>
+          <button className="invite-btn" onClick={() => setShowTeam(true)}><Icon name="users" size={16} /> Invite</button>
           <button className="claude-btn" onClick={() => setChatOpen(!chatOpen)}><Icon name="spark" size={16} /> Ask Claude</button>
           <button className="ghost" onClick={() => downloadHtml(maps.find((m) => m.id === mapId)?.name || 'map', nodes, pos)}><Icon name="down" size={15} /> HTML</button>
           <button className="ghost" onClick={() => printPdf(maps.find((m) => m.id === mapId)?.name || 'map', nodes, pos) || say('Allow pop-ups to export PDF.')}><Icon name="down" size={15} /> PDF</button>
         </header>
 
         {view === 'map' ? (
-          <MapCanvas nodes={nodes} pos={pos} sel={sel} onSelect={setSel} onMove={moveNodes} onAddChild={addChild} onToggle={toggle} />
+          <MapCanvas nodes={nodes} pos={pos} sel={sel} onSelect={setSel} onMove={moveNodes} onAddChild={addChild} onToggle={toggle} viewers={viewers} />
         ) : (
-          <TodoView nodes={nodes} sel={sel} onSelect={setSel} onToggle={toggle} onAddChild={addChild} onPatch={patchNode} />
+          <TodoView nodes={nodes} sel={sel} onSelect={setSel} onToggle={toggle} onAddChild={addChild} onPatch={patchNode} members={members} viewers={viewers} />
         )}
 
         {chatOpen && <ClaudeChat msgs={msgs} thinking={thinking} onSend={askClaude} onClose={() => setChatOpen(false)} />}
@@ -330,8 +474,14 @@ function Workspace() {
             {selected.done ? 'Done. Tap to reopen' : 'Mark as done'}
           </button>
           <div className="field-label">Assigned to</div>
-          <input list="people" className="plain-in" placeholder="Who does this?" value={selected.assignee || ''} onChange={(e) => patchNode(selected.id, { assignee: e.target.value }, { debounce: true })} />
-          <datalist id="people">{[...new Set(nodes.map((n) => n.assignee).filter(Boolean))].map((p) => <option key={p} value={p} />)}</datalist>
+          <div className="assign-list">
+            {members.map((m) => (
+              <button key={m.user_id} className={`assign-chip ${selected.assignee_id === m.user_id ? 'on' : ''}`}
+                onClick={() => patchNode(selected.id, { assignee_id: selected.assignee_id === m.user_id ? null : m.user_id, assignee: '' })}>
+                <Avatar name={m.name || m.email} url={m.avatar_url} size={22} /> {(m.name || m.email).split(' ')[0]}
+              </button>
+            ))}
+          </div>
           <div className="row2">
             <div className="grow"><div className="field-label">Due</div><input type="date" className="plain-in" value={selected.due || ''} onChange={(e) => patchNode(selected.id, { due: e.target.value || null })} /></div>
             <div className="grow"><div className="field-label">Priority</div>
@@ -372,6 +522,11 @@ function Workspace() {
             </div>
           </div>
         </div>
+      )}
+
+      {showTeam && (
+        <Team ws={workspaces.find((w) => w.id === wsId)} members={members} invites={invites} me={user.id} online={online} isOwner={isOwner}
+          onInvite={invite} onRevoke={revokeInvite} onRemove={removeMember} onLeave={leaveWorkspace} onDelete={deleteWorkspace} onClose={() => setShowTeam(false)} />
       )}
 
       {toast && <div className="toast">{toast}</div>}

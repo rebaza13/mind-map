@@ -25,3 +25,9 @@ Indented bullets, 2 spaces per level:
   - Build
 ```
 Also accepted: `Parent: child, child`, `A > B > C`, `done <title>`, `delete <title>`. The **AI prompt** button copies a ready-made prompt for any AI.
+
+## Teams
+- **Workspaces**: every map lives in a workspace. Switch or create one from the top of the sidebar.
+- **Invite**: the Invite button stores the invite and emails a sign-in link. Whoever signs in with that address (Google or the email link) joins the workspace automatically.
+- **Live**: changes sync instantly through Supabase Realtime, and teammates' Google profile pictures show who is online and who is looking at which task. Tasks can be assigned to members.
+- **Access**: row-level security ties every map and task to workspace membership (see `supabase/migrations`).

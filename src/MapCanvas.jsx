@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Icon from './Icon'
+import Avatar from './Avatar'
 import { NODE_H, descendants, nodeW, progress } from './tree'
 
-export default function MapCanvas({ nodes, pos, sel, onSelect, onMove, onAddChild, onToggle }) {
+export default function MapCanvas({ nodes, pos, sel, onSelect, onMove, onAddChild, onToggle, viewers = {} }) {
   const wrap = useRef(null)
   const [view, setView] = useState({ x: 80, y: 0, k: 1 })
   const [drag, setDrag] = useState(null) // {ids, dx, dy}
@@ -94,6 +95,9 @@ export default function MapCanvas({ nodes, pos, sel, onSelect, onMove, onAddChil
               </button>
               <span className="label">{n.title}</span>
               {pr && <em>{pr.done}/{pr.total}</em>}
+              {viewers[n.id]?.length > 0 && (
+                <span className="viewers">{viewers[n.id].map((u) => <Avatar key={u.id} name={u.name} url={u.avatar} size={22} title={`${u.name} is here`} />)}</span>
+              )}
               {sel === n.id && (
                 <button className="plus" title="Add subtask" onPointerDown={(e) => e.stopPropagation()} onClick={() => onAddChild(n.id)}><Icon name="plus" size={16} /></button>
               )}
