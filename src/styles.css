@@ -51,7 +51,15 @@ input:focus, textarea:focus { border-color: var(--accent); }
 .sec-head h3 { margin: 0; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
 .sec-head button { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; width: 26px; height: 26px; }
 .list { display: flex; flex-direction: column; gap: 4px; }
-.item { text-align: left; background: none; border: 1px solid transparent; border-radius: 10px; padding: 8px 10px; }
+.item { display: flex; align-items: center; gap: 4px; border: 1px solid transparent; border-radius: 10px; padding: 4px 6px 4px 10px; }
+.item .name { flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: 4px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item .x { background: none; border: 0; color: var(--muted); opacity: 0; padding: 4px 6px; border-radius: 6px; }
+.item:hover .x { opacity: 1; }
+.item .x:hover { color: #d33; background: var(--panel); }
+.item input { width: 100%; padding: 4px 8px; }
+.confirm { flex: 1; display: flex; align-items: center; gap: 6px; font-size: 0.85rem; }
+.confirm button { border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 2px 10px; }
+.confirm .yes { background: #d33; color: #fff; border-color: #d33; }
 .item:hover { background: var(--panel); }
 .item.on { background: rgba(124, 92, 255, 0.18); border-color: rgba(124, 92, 255, 0.5); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 4px; }
@@ -151,3 +159,4 @@ input:focus, textarea:focus { border-color: var(--accent); }
 .chatpanel form input { flex: 1; min-width: 0; }
 .chatpanel form button { border: 0; border-radius: 10px; padding: 0 14px; font-weight: 700; background: #7c5cff; color: #fff; }
 .chatpanel form button:disabled { opacity: 0.4; }
+.cmd .copy { background: var(--panel); color: var(--text); border: 1px solid var(--line); font-weight: 500; padding: 0 12px; }

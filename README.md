@@ -15,3 +15,13 @@ npm install
 npm run dev
 ```
 Database schema lives in `supabase/migrations`.
+
+## Text format (paste an AI's answer into the bottom bar)
+Indented bullets, 2 spaces per level:
+```
+- Launch website
+  - Design
+    - Logo
+  - Build
+```
+Also accepted: `Parent: child, child`, `A > B > C`, `done <title>`, `delete <title>`. The **AI prompt** button copies a ready-made prompt for any AI.

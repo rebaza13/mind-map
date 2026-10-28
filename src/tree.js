@@ -74,3 +74,22 @@ export function parseOutline(text) {
   }
   return items
 }
+
+// Paste this into any AI chat; whatever it answers can be pasted straight into the Mindbloom text bar.
+export const AI_PROMPT = `Make me a mind map about: [YOUR TOPIC HERE]
+
+Reply with ONLY an indented bullet list inside a code block, nothing else. Rules:
+- One idea per line, starting with "- ".
+- Indent children by exactly 2 spaces under their parent.
+- Keep each title short (2-6 words).
+- 4-7 main branches, each with 2-5 subtasks.
+
+Example:
+- Launch website
+  - Design
+    - Logo
+    - Colours
+  - Build
+    - Frontend
+    - Backend
+  - Ship`

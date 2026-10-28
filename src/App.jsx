@@ -4,7 +4,7 @@ import Login from './Login'
 import MapCanvas from './MapCanvas'
 import TodoView from './TodoView'
 import { downloadHtml, printPdf } from './exportMap'
-import { PALETTE, descendants, layout, nodeW, parseOutline, pickColor } from './tree'
+import { PALETTE, descendants, layout, nodeW, parseOutline, pickColor, AI_PROMPT } from './tree'
 
 export default function App() {
   const [session, setSession] = useState(undefined)
@@ -39,6 +39,9 @@ function Workspace() {
   const [chatForm, setChatForm] = useState(null)
   const timers = useRef({})
   const [chatOpen, setChatOpen] = useState(false)
+  const [newName, setNewName] = useState(null) // null = not creating
+  const [confirmDel, setConfirmDel] = useState(null)
+  const [renaming, setRenaming] = useState(null)
   const [msgs, setMsgs] = useState([])
   const [thinking, setThinking] = useState(false)
 
@@ -221,8 +224,10 @@ function Workspace() {
   }
 
   // ---- maps / chats --------------------------------------------------------
-  const newMap = async () => {
-    const name = prompt('Name your new map')
+  const newMap = async (e) => {
+    e?.preventDefault()
+    const name = (newName || '').trim()
+    setNewName(null)
     if (!name) return
     const { data: m, error } = await supabase.from('maps').insert({ name }).select().single()
     if (error) return fail(error)
@@ -231,15 +236,26 @@ function Workspace() {
     setMapId(m.id)
   }
 
-  const deleteMap = async () => {
-    if (maps.length < 2) return say('Keep at least one map.')
-    const cur = maps.find((m) => m.id === mapId)
-    if (!confirm(`Delete “${cur.name}” and everything in it?`)) return
-    const { error } = await supabase.from('maps').delete().eq('id', mapId)
+  const deleteMap = async (id) => {
+    setConfirmDel(null)
+    const { error } = await supabase.from('maps').delete().eq('id', id)
     if (error) return fail(error)
-    const rest = maps.filter((m) => m.id !== mapId)
+    const rest = maps.filter((m) => m.id !== id)
+    if (!rest.length) { // deleting the last map leaves a fresh empty one
+      const { data: m } = await supabase.from('maps').insert({ name: 'My first map' }).select().single()
+      await supabase.from('nodes').insert({ map_id: m.id, title: 'My mind', color: PALETTE[0] })
+      setMaps([m]); setMapId(m.id); return
+    }
     setMaps(rest)
-    setMapId(rest[0].id)
+    if (id === mapId) setMapId(rest[0].id)
+  }
+
+  const renameMap = async (id, name) => {
+    setRenaming(null)
+    const clean = name.trim()
+    if (!clean) return
+    setMaps((ms) => ms.map((m) => (m.id === id ? { ...m, name: clean } : m)))
+    fail((await supabase.from('maps').update({ name: clean }).eq('id', id)).error)
   }
 
   const saveChat = async (e) => {
@@ -274,11 +290,25 @@ function Workspace() {
       <aside className="side">
         <div className="brand">Mind<span>bloom</span></div>
 
-        <div className="sec-head"><h3>Maps</h3><button onClick={newMap}>＋</button></div>
+        <div className="sec-head"><h3>Maps</h3><button title="New map" onClick={() => setNewName('')}>＋</button></div>
         <div className="list">
           {maps.map((m) => (
-            <button key={m.id} className={`item ${m.id === mapId ? 'on' : ''}`} onClick={() => setMapId(m.id)}>{m.name}</button>
+            <div key={m.id} className={`item ${m.id === mapId ? 'on' : ''}`}>
+              {renaming === m.id ? (
+                <input autoFocus defaultValue={m.name} onBlur={(e) => renameMap(m.id, e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') setRenaming(null) }} />
+              ) : confirmDel === m.id ? (
+                <span className="confirm">Delete? <button className="yes" onClick={() => deleteMap(m.id)}>Yes</button><button onClick={() => setConfirmDel(null)}>No</button></span>
+              ) : (
+                <>
+                  <button className="name" onClick={() => setMapId(m.id)} onDoubleClick={() => setRenaming(m.id)} title="Double-click to rename">{m.name}</button>
+                  <button className="x" title="Delete map" onClick={() => setConfirmDel(m.id)}>✕</button>
+                </>
+              )}
+            </div>
           ))}
+          {newName !== null && (
+            <form onSubmit={newMap}><input autoFocus placeholder="Map name, Enter" value={newName} onChange={(e) => setNewName(e.target.value)} onBlur={() => !newName.trim() && setNewName(null)} /></form>
+          )}
         </div>
 
         <div className="sec-head"><h3>AI chats</h3><button onClick={() => setChatForm({ title: '', project: '', summary: '', url: '' })}>＋</button></div>
@@ -308,7 +338,6 @@ function Workspace() {
           <button className="claude-btn" onClick={() => setChatOpen(!chatOpen)}>✦ Claude</button>
           <button className="ghost" onClick={() => downloadHtml(maps.find((m) => m.id === mapId)?.name || 'map', nodes, pos)}>Export HTML</button>
           <button className="ghost" onClick={() => printPdf(maps.find((m) => m.id === mapId)?.name || 'map', nodes, pos) || say('Allow pop-ups to export PDF.')}>Export PDF</button>
-          <button className="ghost" onClick={deleteMap}>Delete map</button>
         </header>
 
         {view === 'map' ? (
@@ -360,7 +389,9 @@ function Workspace() {
 
 function CommandBar({ onRun, target }) {
   const [text, setText] = useState('')
+  const [copied, setCopied] = useState(false)
   const submit = () => { onRun(text); setText('') }
+  const copy = () => navigator.clipboard.writeText(AI_PROMPT).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) })
   return (
     <div className="cmd">
       <textarea
@@ -370,6 +401,7 @@ function CommandBar({ onRun, target }) {
         onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }}
         placeholder={`Type or paste text to grow “${target || 'the map'}”  —  Launch: Design, Build, Ship   ·   done Build   ·   Shift+Enter for an outline`}
       />
+      <button className="copy" type="button" onClick={copy} title="Copy a prompt to give any AI; paste its answer here">{copied ? 'Copied ✓' : 'AI prompt'}</button>
       <button onClick={submit} disabled={!text.trim()}>Grow</button>
     </div>
   )
