@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import Icon from './Icon'
 import { NODE_H, descendants, nodeW, progress } from './tree'
 
 export default function MapCanvas({ nodes, pos, sel, onSelect, onMove, onAddChild, onToggle }) {
@@ -89,21 +90,21 @@ export default function MapCanvas({ nodes, pos, sel, onSelect, onMove, onAddChil
               onPointerDown={(e) => down(e, n)}
             >
               <button className="tick" title="Mark done" onPointerDown={(e) => e.stopPropagation()} onClick={() => onToggle(n.id)}>
-                {n.done ? '✓' : ''}
+                {n.done && <Icon name="check" size={13} />}
               </button>
               <span className="label">{n.title}</span>
               {pr && <em>{pr.done}/{pr.total}</em>}
               {sel === n.id && (
-                <button className="plus" title="Add subtask" onPointerDown={(e) => e.stopPropagation()} onClick={() => onAddChild(n.id)}>+</button>
+                <button className="plus" title="Add subtask" onPointerDown={(e) => e.stopPropagation()} onClick={() => onAddChild(n.id)}><Icon name="plus" size={16} /></button>
               )}
             </div>
           )
         })}
       </div>
       <div className="zoom" onPointerDown={(e) => e.stopPropagation()}>
-        <button onClick={() => setView((v) => ({ ...v, k: Math.min(2.5, v.k * 1.2) }))}>＋</button>
-        <button onClick={() => setView((v) => ({ ...v, k: Math.max(0.25, v.k / 1.2) }))}>－</button>
-        <button onClick={fit}>Fit</button>
+        <button onClick={() => setView((v) => ({ ...v, k: Math.min(2.5, v.k * 1.2) }))}><Icon name="plus" size={16} /></button>
+        <button onClick={() => setView((v) => ({ ...v, k: Math.max(0.25, v.k / 1.2) }))}><Icon name="minus" size={16} /></button>
+        <button title="Fit to screen" onClick={fit}><Icon name="fit" size={16} /></button>
       </div>
     </div>
   )

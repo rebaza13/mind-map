@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase, clearLogin, markLogin, sessionExpired } from './supabase'
 import Login from './Login'
 import MapCanvas from './MapCanvas'
-import TodoView from './TodoView'
+import TodoView, { Avatar } from './TodoView'
+import Icon from './Icon'
 import { downloadHtml, printPdf } from './exportMap'
 import { PALETTE, descendants, layout, nodeW, parseOutline, pickColor, AI_PROMPT } from './tree'
 
@@ -32,15 +33,13 @@ function Workspace() {
   const [maps, setMaps] = useState([])
   const [mapId, setMapId] = useState(null)
   const [nodes, setNodes] = useState([])
-  const [chats, setChats] = useState([])
   const [sel, setSel] = useState(null)
   const [view, setView] = useState('map')
   const [toast, setToast] = useState('')
-  const [chatForm, setChatForm] = useState(null)
   const timers = useRef({})
   const [chatOpen, setChatOpen] = useState(false)
   const [newName, setNewName] = useState(null) // null = not creating
-  const [confirmDel, setConfirmDel] = useState(null)
+  const [ask, setAsk] = useState(null) // {title, body, label, onYes}
   const [renaming, setRenaming] = useState(null)
   const [msgs, setMsgs] = useState([])
   const [thinking, setThinking] = useState(false)
@@ -64,7 +63,6 @@ function Workspace() {
 
   useEffect(() => {
     loadMaps()
-    supabase.from('chat_sessions').select('*').order('created_at', { ascending: false }).then(({ data }) => setChats(data || []))
   }, [loadMaps])
 
   useEffect(() => {
@@ -237,7 +235,6 @@ function Workspace() {
   }
 
   const deleteMap = async (id) => {
-    setConfirmDel(null)
     const { error } = await supabase.from('maps').delete().eq('id', id)
     if (error) return fail(error)
     const rest = maps.filter((m) => m.id !== id)
@@ -258,22 +255,6 @@ function Workspace() {
     fail((await supabase.from('maps').update({ name: clean }).eq('id', id)).error)
   }
 
-  const saveChat = async (e) => {
-    e.preventDefault()
-    const { data, error } = await supabase.from('chat_sessions').insert(chatForm).select().single()
-    if (error) return fail(error)
-    setChats((c) => [data, ...c])
-    setChatForm(null)
-  }
-
-  const chatToNode = (c) => {
-    const base = sel || nodes.find((n) => !n.parent_id)?.id
-    const row = makeNode(base, c.title, { notes: [c.project && `Project: ${c.project}`, c.summary, c.url].filter(Boolean).join('\n') })
-    insertRows([row]).then(() => setSel(row.id))
-  }
-
-  const projects = [...new Set(chats.map((c) => c.project).filter(Boolean))]
-
   // Keyboard: Tab adds a subtask, Delete removes the selected node.
   useEffect(() => {
     const h = (e) => {
@@ -290,39 +271,25 @@ function Workspace() {
       <aside className="side">
         <div className="brand">Mind<span>bloom</span></div>
 
-        <div className="sec-head"><h3>Maps</h3><button title="New map" onClick={() => setNewName('')}>＋</button></div>
+        <button className="new-map" onClick={() => setNewName('')}><Icon name="plus" size={16} /> New map</button>
+        <div className="sec-head"><h3>Your maps</h3></div>
         <div className="list">
+          {newName !== null && (
+            <form onSubmit={newMap}><input autoFocus placeholder="Name it, then Enter" value={newName} onChange={(e) => setNewName(e.target.value)} onBlur={() => !newName.trim() && setNewName(null)} /></form>
+          )}
           {maps.map((m) => (
             <div key={m.id} className={`item ${m.id === mapId ? 'on' : ''}`}>
               {renaming === m.id ? (
                 <input autoFocus defaultValue={m.name} onBlur={(e) => renameMap(m.id, e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') setRenaming(null) }} />
-              ) : confirmDel === m.id ? (
-                <span className="confirm">Delete? <button className="yes" onClick={() => deleteMap(m.id)}>Yes</button><button onClick={() => setConfirmDel(null)}>No</button></span>
               ) : (
                 <>
                   <button className="name" onClick={() => setMapId(m.id)} onDoubleClick={() => setRenaming(m.id)} title="Double-click to rename">{m.name}</button>
-                  <button className="x" title="Delete map" onClick={() => setConfirmDel(m.id)}>✕</button>
+                  <button className="x" title="Rename" onClick={() => setRenaming(m.id)}><Icon name="pen" size={14} /></button>
+                  <button className="x del" title="Delete map" onClick={() => setAsk({ title: `Delete “${m.name}”?`, body: 'Every idea and subtask in this map will be gone for good.', label: 'Delete map', onYes: () => deleteMap(m.id) })}><Icon name="trash" size={14} /></button>
                 </>
               )}
             </div>
           ))}
-          {newName !== null && (
-            <form onSubmit={newMap}><input autoFocus placeholder="Map name, Enter" value={newName} onChange={(e) => setNewName(e.target.value)} onBlur={() => !newName.trim() && setNewName(null)} /></form>
-          )}
-        </div>
-
-        <div className="sec-head"><h3>AI chats</h3><button onClick={() => setChatForm({ title: '', project: '', summary: '', url: '' })}>＋</button></div>
-        {projects.length > 0 && (
-          <div className="chips">{projects.map((p) => <span key={p} className="chip">{p}</span>)}</div>
-        )}
-        <div className="list chats">
-          {chats.map((c) => (
-            <div key={c.id} className="chat" title="Add to the map as a node" onClick={() => chatToNode(c)}>
-              <b>{c.title}</b>
-              <small>{c.project || 'no project'} · {new Date(c.created_at).toLocaleDateString()}</small>
-            </div>
-          ))}
-          {!chats.length && <p className="muted">No chats yet. Add one with ＋, or ask Claude to log one.</p>}
         </div>
 
         <button className="signout" onClick={() => { clearLogin(); supabase.auth.signOut() }}>Sign out</button>
@@ -335,15 +302,15 @@ function Workspace() {
             <button className={view === 'map' ? 'on' : ''} onClick={() => setView('map')}>Mind map</button>
             <button className={view === 'todo' ? 'on' : ''} onClick={() => setView('todo')}>To-do</button>
           </div>
-          <button className="claude-btn" onClick={() => setChatOpen(!chatOpen)}>✦ Claude</button>
-          <button className="ghost" onClick={() => downloadHtml(maps.find((m) => m.id === mapId)?.name || 'map', nodes, pos)}>Export HTML</button>
-          <button className="ghost" onClick={() => printPdf(maps.find((m) => m.id === mapId)?.name || 'map', nodes, pos) || say('Allow pop-ups to export PDF.')}>Export PDF</button>
+          <button className="claude-btn" onClick={() => setChatOpen(!chatOpen)}><Icon name="spark" size={16} /> Ask Claude</button>
+          <button className="ghost" onClick={() => downloadHtml(maps.find((m) => m.id === mapId)?.name || 'map', nodes, pos)}><Icon name="down" size={15} /> HTML</button>
+          <button className="ghost" onClick={() => printPdf(maps.find((m) => m.id === mapId)?.name || 'map', nodes, pos) || say('Allow pop-ups to export PDF.')}><Icon name="down" size={15} /> PDF</button>
         </header>
 
         {view === 'map' ? (
           <MapCanvas nodes={nodes} pos={pos} sel={sel} onSelect={setSel} onMove={moveNodes} onAddChild={addChild} onToggle={toggle} />
         ) : (
-          <TodoView nodes={nodes} sel={sel} onSelect={setSel} onToggle={toggle} onAddChild={addChild} />
+          <TodoView nodes={nodes} sel={sel} onSelect={setSel} onToggle={toggle} onAddChild={addChild} onPatch={patchNode} />
         )}
 
         {chatOpen && <ClaudeChat msgs={msgs} thinking={thinking} onSend={askClaude} onClose={() => setChatOpen(false)} />}
@@ -351,34 +318,59 @@ function Workspace() {
       </main>
 
       {selected && (
-        <aside className="inspector">
+        <aside className="inspector" style={{ '--c': selected.color }}>
+          <div className="insp-top">
+            <span className="dot" />
+            <span className="kind">{selected.parent_id ? 'Subtask' : 'Centre of the map'}</span>
+            <button className="icon-btn" title="Close" onClick={() => setSel(null)}><Icon name="x" size={16} /></button>
+          </div>
           <input className="title-in" value={selected.title} onChange={(e) => patchNode(selected.id, { title: e.target.value }, { debounce: true })} />
+          <button className={`done-btn ${selected.done ? 'on' : ''}`} onClick={() => toggle(selected.id)}>
+            <span className="box">{selected.done && <Icon name="check" size={14} />}</span>
+            {selected.done ? 'Done. Tap to reopen' : 'Mark as done'}
+          </button>
+          <div className="field-label">Assigned to</div>
+          <input list="people" className="plain-in" placeholder="Who does this?" value={selected.assignee || ''} onChange={(e) => patchNode(selected.id, { assignee: e.target.value }, { debounce: true })} />
+          <datalist id="people">{[...new Set(nodes.map((n) => n.assignee).filter(Boolean))].map((p) => <option key={p} value={p} />)}</datalist>
+          <div className="row2">
+            <div className="grow"><div className="field-label">Due</div><input type="date" className="plain-in" value={selected.due || ''} onChange={(e) => patchNode(selected.id, { due: e.target.value || null })} /></div>
+            <div className="grow"><div className="field-label">Priority</div>
+              <div className="pri-pick">{['low', 'med', 'high'].map((p) => <button key={p} className={`${p} ${selected.priority === p ? 'on' : ''}`} onClick={() => patchNode(selected.id, { priority: selected.priority === p ? '' : p })}>{p}</button>)}</div>
+            </div>
+          </div>
+          <div className="field-label">Colour</div>
           <div className="swatches">
             {PALETTE.map((c) => (
               <button key={c} style={{ background: c }} className={selected.color === c ? 'on' : ''} onClick={() => patchNode(selected.id, { color: c })} />
             ))}
           </div>
-          <textarea placeholder="Notes…" value={selected.notes} onChange={(e) => patchNode(selected.id, { notes: e.target.value }, { debounce: true })} />
-          <div className="actions">
-            <button onClick={() => addChild(selected.id)}>＋ Subtask</button>
-            <button onClick={() => toggle(selected.id)}>{selected.done ? 'Reopen' : 'Mark done'}</button>
-            <button onClick={() => patchNode(selected.id, { x: null, y: null })} title="Back to auto layout">Reset spot</button>
-            <button className="danger" onClick={() => removeNode(selected.id)}>Delete</button>
+          <div className="field-label">Notes</div>
+          <textarea placeholder="Write anything about this idea…" value={selected.notes} onChange={(e) => patchNode(selected.id, { notes: e.target.value }, { debounce: true })} />
+          <button className="primary" onClick={() => addChild(selected.id)}><Icon name="plus" size={16} /> Add subtask</button>
+          <div className="row2">
+            <button className="soft" onClick={() => patchNode(selected.id, { x: null, y: null })} title="Back to auto layout"><Icon name="reset" size={15} /> Reset spot</button>
+            {selected.parent_id && (
+              <button className="soft danger" onClick={() => {
+                const n = descendants(nodes, selected.id).length
+                const go = () => removeNode(selected.id)
+                n ? setAsk({ title: `Delete “${selected.title}”?`, body: `This also removes its ${n} subtask${n > 1 ? 's' : ''}.`, label: 'Delete', onYes: go }) : go()
+              }}><Icon name="trash" size={15} /> Delete</button>
+            )}
           </div>
         </aside>
       )}
 
-      {chatForm && (
-        <div className="modal" onClick={() => setChatForm(null)}>
-          <form onClick={(e) => e.stopPropagation()} onSubmit={saveChat}>
-            <h3>Log an AI chat</h3>
-            <input required placeholder="Chat title" value={chatForm.title} onChange={(e) => setChatForm({ ...chatForm, title: e.target.value })} />
-            <input list="projs" placeholder="Project" value={chatForm.project} onChange={(e) => setChatForm({ ...chatForm, project: e.target.value })} />
-            <datalist id="projs">{projects.map((p) => <option key={p} value={p} />)}</datalist>
-            <input placeholder="Link (optional)" value={chatForm.url} onChange={(e) => setChatForm({ ...chatForm, url: e.target.value })} />
-            <textarea placeholder="What was it about?" value={chatForm.summary} onChange={(e) => setChatForm({ ...chatForm, summary: e.target.value })} />
-            <button>Save</button>
-          </form>
+      {ask && (
+        <div className="modal" onClick={() => setAsk(null)}>
+          <div className="dialog" onClick={(e) => e.stopPropagation()} role="dialog">
+            <div className="dialog-icon"><Icon name="trash" size={24} /></div>
+            <h3>{ask.title}</h3>
+            <p>{ask.body}</p>
+            <div className="dialog-actions">
+              <button className="cancel" autoFocus onClick={() => setAsk(null)}>Keep it</button>
+              <button className="confirm-del" onClick={() => { const f = ask.onYes; setAsk(null); f() }}>{ask.label}</button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -414,7 +406,7 @@ function ClaudeChat({ msgs, thinking, onSend, onClose }) {
   const send = (e) => { e.preventDefault(); if (!text.trim() || thinking) return; onSend(text.trim()); setText('') }
   return (
     <div className="chatpanel">
-      <div className="chat-head"><b>✦ Claude</b><button onClick={onClose}>×</button></div>
+      <div className="chat-head"><b>✦ Claude</b><button onClick={onClose}><Icon name="x" size={16} /></button></div>
       <div className="chat-body">
         {!msgs.length && <p className="muted">Tell me what to build or change. “Plan a trip to Japan”, “add a budget branch”, “mark design as done”…</p>}
         {msgs.map((m, i) => <div key={i} className={`bubble ${m.role}`}>{m.text}</div>)}
