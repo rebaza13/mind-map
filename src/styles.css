@@ -32,7 +32,7 @@ input:focus, textarea:focus { border-color: var(--accent); }
 .login-card {
   position: relative; width: min(360px, 100%); display: flex; flex-direction: column; gap: 14px; padding: 32px;
   background: rgba(255, 255, 255, 0.78); backdrop-filter: blur(18px); border: 1px solid var(--line); border-radius: 22px;
-  box-shadow: 0 30px 80px rgba(80, 50, 200, 0.2);
+ 
 }
 .login-card h1 { margin: 0; font-size: 2.2rem; letter-spacing: -1px; }
 .login-card h1 span, .brand span { background: linear-gradient(90deg, #7c5cff, #38e1c6, #ff7ab8); -webkit-background-clip: text; background-clip: text; color: transparent; }
@@ -73,7 +73,14 @@ input:focus, textarea:focus { border-color: var(--accent); }
 /* ---- canvas ---- */
 .canvas {
   flex: 1; position: relative; overflow: hidden; touch-action: none; cursor: grab;
-  background-image: radial-gradient(rgba(80, 50, 200, 0.16) 1px, transparent 1px); background-size: 28px 28px;
+  background:
+    radial-gradient(circle at 1px 1px, rgba(124, 92, 255, 0.35) 1.5px, transparent 2px) 0 0 / 30px 30px,
+    radial-gradient(circle at 15px 15px, rgba(255, 122, 184, 0.3) 1.5px, transparent 2px) 0 0 / 30px 30px,
+    radial-gradient(45% 55% at 10% 15%, rgba(56, 225, 198, 0.22), transparent 70%),
+    radial-gradient(40% 50% at 90% 20%, rgba(255, 200, 87, 0.22), transparent 70%),
+    radial-gradient(50% 55% at 75% 95%, rgba(255, 122, 184, 0.2), transparent 70%),
+    radial-gradient(45% 50% at 20% 90%, rgba(124, 92, 255, 0.2), transparent 70%),
+    #f8f6ff;
 }
 .canvas:active { cursor: grabbing; }
 .canvas-inner { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
@@ -83,16 +90,15 @@ input:focus, textarea:focus { border-color: var(--accent); }
 .node {
   position: absolute; display: flex; align-items: center; gap: 8px; padding: 0 12px 0 8px; cursor: pointer; user-select: none;
   background: color-mix(in srgb, var(--c) 18%, #fff); border: 2px solid var(--c); border-radius: 99px;
-  box-shadow: 0 0 22px color-mix(in srgb, var(--c) 35%, transparent); transition: box-shadow 0.15s;
 }
 .node.root { font-weight: 700; background: color-mix(in srgb, var(--c) 38%, #fff); }
-.node.sel { box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 40%, transparent), 0 0 34px var(--c); }
+.node.sel { border-width: 4px; background: color-mix(in srgb, var(--c) 32%, #fff); }
 .node.done .label { text-decoration: line-through; opacity: 0.55; }
 .node .label { color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.92rem; }
 .node em { font-style: normal; font-size: 0.7rem; color: var(--muted); }
 .tick { flex: none; width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--c); background: none; padding: 0; line-height: 1; font-size: 0.8rem; color: #fff; }
 .node.done .tick { background: var(--c); }
-.plus { position: absolute; right: -16px; top: 50%; transform: translateY(-50%); width: 30px; height: 30px; border-radius: 50%; border: 0; background: var(--c); color: #fff; font-size: 1.2rem; font-weight: 700; box-shadow: 0 4px 14px rgba(80, 50, 200, 0.3); }
+.plus { position: absolute; right: -16px; top: 50%; transform: translateY(-50%); width: 30px; height: 30px; border-radius: 50%; border: 0; background: var(--c); color: #fff; font-size: 1.2rem; font-weight: 700; }
 .zoom { position: absolute; left: 16px; bottom: 90px; display: flex; flex-direction: column; gap: 6px; }
 .zoom button { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; backdrop-filter: blur(8px); }
 
@@ -124,7 +130,7 @@ input:focus, textarea:focus { border-color: var(--accent); }
 .actions button { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 9px; }
 .actions .danger { color: #d33; }
 
-.cmd { position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%); width: min(720px, calc(100% - 40px)); display: flex; gap: 8px; padding: 8px; background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(16px); border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 20px 50px rgba(80, 50, 200, 0.2); }
+.cmd { position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%); width: min(720px, calc(100% - 40px)); display: flex; gap: 8px; padding: 8px; background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(16px); border: 1px solid var(--line); border-radius: 18px; }
 .cmd textarea { flex: 1; resize: none; border: 0; background: none; padding: 8px 10px; }
 .cmd button { border: 0; border-radius: 12px; padding: 0 20px; font-weight: 700; background: linear-gradient(90deg, #7c5cff, #38e1c6); color: #0b0b14; }
 .cmd button:disabled { opacity: 0.35; }
