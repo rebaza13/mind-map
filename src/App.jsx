@@ -38,6 +38,9 @@ function Workspace() {
   const [toast, setToast] = useState('')
   const [chatForm, setChatForm] = useState(null)
   const timers = useRef({})
+  const [chatOpen, setChatOpen] = useState(false)
+  const [msgs, setMsgs] = useState([])
+  const [thinking, setThinking] = useState(false)
 
   const say = (m) => { setToast(m); setTimeout(() => setToast(''), 3500) }
   const fail = (error) => error && say(error.message)
@@ -172,6 +175,51 @@ function Workspace() {
     if (rows.length) { await insertRows(rows); say(`Added ${rows.length} node${rows.length > 1 ? 's' : ''}.`) }
   }
 
+  // ---- Claude: send the map + message to the edge function, apply the edits it returns ----
+  const askClaude = async (text) => {
+    const history = msgs.map((m) => ({ role: m.role, content: m.text }))
+    setMsgs((m) => [...m, { role: 'user', text }])
+    setThinking(true)
+    const { data, error } = await supabase.functions.invoke('claude-map', {
+      body: {
+        message: text,
+        history,
+        mapName: maps.find((m) => m.id === mapId)?.name,
+        nodes: nodes.map(({ id, parent_id, title, done }) => ({ id, parent_id, title, done })),
+      },
+    })
+    setThinking(false)
+    let err = error?.message
+    if (error?.context?.json) err = (await error.context.json().catch(() => null))?.error || err
+    if (err) return setMsgs((m) => [...m, { role: 'assistant', text: `⚠ ${err}` }])
+    await applyOps(data.ops || [])
+    setMsgs((m) => [...m, { role: 'assistant', text: data.reply || 'Done.' }])
+  }
+
+  const applyOps = async (ops) => {
+    const refs = new Map()
+    const rows = []
+    const all = () => [...nodes, ...rows]
+    for (const o of ops) {
+      const target = all().find((n) => n.id === (refs.get(o.id) ?? o.id))
+      if (o.op === 'add') {
+        const parentId = refs.get(o.id) ?? (target ? target.id : nodes.find((n) => !n.parent_id)?.id)
+        const parent = all().find((n) => n.id === parentId)
+        const n = all().filter((x) => x.parent_id === parentId).length
+        const row = {
+          id: crypto.randomUUID(), map_id: mapId, parent_id: parentId, title: o.title || 'New idea', notes: o.notes || '',
+          done: false, x: null, y: null, position: n, created_at: new Date().toISOString(), color: pickColor(parent, n),
+        }
+        if (o.ref) refs.set(o.ref, row.id)
+        rows.push(row)
+      } else if (target && o.op === 'rename' && o.title) patchNode(target.id, { title: o.title })
+      else if (target && o.op === 'done') patchNode(target.id, { done: o.done !== false })
+      else if (target && o.op === 'notes') patchNode(target.id, { notes: o.notes || '' })
+      else if (target && o.op === 'delete') removeNode(target.id)
+    }
+    if (rows.length) await insertRows(rows)
+  }
+
   // ---- maps / chats --------------------------------------------------------
   const newMap = async () => {
     const name = prompt('Name your new map')
@@ -257,6 +305,7 @@ function Workspace() {
             <button className={view === 'map' ? 'on' : ''} onClick={() => setView('map')}>Mind map</button>
             <button className={view === 'todo' ? 'on' : ''} onClick={() => setView('todo')}>To-do</button>
           </div>
+          <button className="claude-btn" onClick={() => setChatOpen(!chatOpen)}>✦ Claude</button>
           <button className="ghost" onClick={() => downloadHtml(maps.find((m) => m.id === mapId)?.name || 'map', nodes, pos)}>Export HTML</button>
           <button className="ghost" onClick={() => printPdf(maps.find((m) => m.id === mapId)?.name || 'map', nodes, pos) || say('Allow pop-ups to export PDF.')}>Export PDF</button>
           <button className="ghost" onClick={deleteMap}>Delete map</button>
@@ -268,6 +317,7 @@ function Workspace() {
           <TodoView nodes={nodes} sel={sel} onSelect={setSel} onToggle={toggle} onAddChild={addChild} />
         )}
 
+        {chatOpen && <ClaudeChat msgs={msgs} thinking={thinking} onSend={askClaude} onClose={() => setChatOpen(false)} />}
         <CommandBar onRun={runCommand} target={selected?.title} />
       </main>
 
@@ -321,6 +371,25 @@ function CommandBar({ onRun, target }) {
         placeholder={`Type or paste text to grow “${target || 'the map'}”  —  Launch: Design, Build, Ship   ·   done Build   ·   Shift+Enter for an outline`}
       />
       <button onClick={submit} disabled={!text.trim()}>Grow</button>
+    </div>
+  )
+}
+
+function ClaudeChat({ msgs, thinking, onSend, onClose }) {
+  const [text, setText] = useState('')
+  const end = useRef(null)
+  useEffect(() => end.current?.scrollIntoView({ behavior: 'smooth' }), [msgs, thinking])
+  const send = (e) => { e.preventDefault(); if (!text.trim() || thinking) return; onSend(text.trim()); setText('') }
+  return (
+    <div className="chatpanel">
+      <div className="chat-head"><b>✦ Claude</b><button onClick={onClose}>×</button></div>
+      <div className="chat-body">
+        {!msgs.length && <p className="muted">Tell me what to build or change. “Plan a trip to Japan”, “add a budget branch”, “mark design as done”…</p>}
+        {msgs.map((m, i) => <div key={i} className={`bubble ${m.role}`}>{m.text}</div>)}
+        {thinking && <div className="bubble assistant">Thinking…</div>}
+        <div ref={end} />
+      </div>
+      <form onSubmit={send}><input value={text} onChange={(e) => setText(e.target.value)} placeholder="Ask Claude…" /><button disabled={thinking || !text.trim()}>Send</button></form>
     </div>
   )
 }
