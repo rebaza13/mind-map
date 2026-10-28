@@ -1,0 +1,10 @@
+project_id = "jrjcgnjfhqioszkupiml"
+
+[auth]
+site_url = "https://mindbloom-lemon.vercel.app"
+additional_redirect_urls = ["https://mindbloom-lemon.vercel.app/**", "http://localhost:5173/**"]
+
+[auth.external.google]
+enabled = true
+client_id = "943479994132-7jdfjrp7p8cdhqls59s1eromkg99l0rn.apps.googleusercontent.com"
+secret = "env(GOOGLE_OAUTH_SECRET)"
