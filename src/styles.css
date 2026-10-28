@@ -326,6 +326,16 @@ button svg { display: block; flex: none; }
 .chat-head b { display: flex; align-items: center; gap: 6px; }
 .prompt-link { margin: 0 12px 4px; padding: 6px; background: none; border: 0; color: #7c5cff; font-size: 0.8rem; text-align: left; }
 .chatpanel form textarea { flex: 1; min-width: 0; resize: none; max-height: 120px; }
+.chatpanel.dragging { outline: 2px dashed #7c5cff; outline-offset: -6px; }
+.chatpanel form button.attach { background: var(--panel); color: var(--muted); padding: 0 10px; }
+.attach-row { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px 0; border-top: 1px solid var(--line); }
+.file-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 3px 6px; border-radius: 8px; background: var(--panel); font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-chip img { width: 22px; height: 22px; object-fit: cover; border-radius: 4px; }
+.file-chip button { background: none; border: 0; padding: 0; color: var(--muted); display: flex; }
+.file-err { color: #e5484d; font-size: 0.75rem; }
+.bubble-files { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+.bubble-files img { max-width: 140px; max-height: 110px; border-radius: 8px; }
+.bubble.user .file-chip { background: rgba(255,255,255,0.2); }
 .menu-btn { display: none; place-items: center; width: 38px; height: 38px; padding: 0; border: 0; border-radius: 10px; background: var(--panel); }
 .scrim { display: none; }
 .export-row { display: flex; gap: 6px; margin-top: auto; padding-bottom: 4px; }
@@ -334,6 +344,45 @@ button svg { display: block; flex: none; }
 .crash { text-align: center; padding: 24px; }
 .crash button { margin-top: 10px; padding: 10px 20px; border: 0; border-radius: 10px; background: #7c5cff; color: #fff; font-weight: 700; }
 .app { height: 100dvh; }
+
+/* ---- empty states ---- */
+.list-empty { margin: 4px 8px; color: var(--muted); font-size: 0.82rem; line-height: 1.4; }
+.soft:disabled { opacity: 0.45; cursor: default; }
+.seg[hidden] { display: none; }
+.loading { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; background: #fbfaff; }
+.loading span { width: 12px; height: 12px; border-radius: 50%; background: #7c5cff; animation: blink 1s ease-in-out infinite; }
+.loading span:nth-child(2) { background: #38e1c6; animation-delay: 0.15s; }
+.loading span:nth-child(3) { background: #ff7ab8; animation-delay: 0.3s; }
+@keyframes blink { 0%, 100% { transform: scale(0.6); opacity: 0.4; } 50% { transform: scale(1); opacity: 1; } }
+.map-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--muted); background: radial-gradient(rgba(60, 40, 140, 0.18) 1px, transparent 1px) 0 0 / 28px 28px, #fbfaff; }
+.map-empty .primary { width: auto; padding: 11px 20px; background: var(--accent); }
+
+.welcome { position: relative; flex: 1; overflow-y: auto; display: grid; place-items: center; padding: 32px 16px; background: radial-gradient(rgba(60, 40, 140, 0.14) 1px, transparent 1px) 0 0 / 28px 28px, #fbfaff; }
+.welcome-glow { position: absolute; inset: 0; pointer-events: none; background:
+  radial-gradient(35% 40% at 30% 30%, rgba(124, 92, 255, 0.16), transparent 70%),
+  radial-gradient(30% 35% at 72% 70%, rgba(255, 122, 184, 0.14), transparent 70%),
+  radial-gradient(30% 30% at 75% 25%, rgba(56, 225, 198, 0.14), transparent 70%); }
+.welcome-card { position: relative; width: min(620px, 100%); text-align: center; animation: rise 0.4s ease-out; }
+@keyframes rise { from { opacity: 0; transform: translateY(12px); } }
+.welcome-art { width: 200px; height: auto; margin-bottom: 8px; overflow: visible; }
+.bud { transform-box: fill-box; transform-origin: center; animation: bloom 2.8s ease-in-out infinite; }
+.b2 { animation-delay: 0.4s; } .b3 { animation-delay: 0.8s; } .b4 { animation-delay: 1.2s; }
+@keyframes bloom { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.25); } }
+.welcome h1 { margin: 0 0 6px; font-size: clamp(1.6rem, 4vw, 2.3rem); letter-spacing: -1px; }
+.welcome-card > p { margin: 0 0 22px; color: var(--muted); }
+.welcome-ask { display: flex; gap: 8px; padding: 8px; background: #fff; border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 10px 34px rgba(60, 30, 160, 0.1); }
+.welcome-ask:focus-within { border-color: var(--accent); }
+.welcome-ask input { flex: 1; min-width: 0; border: 0; background: none; padding: 10px 12px; font-size: 1rem; }
+.welcome-ask button { display: flex; align-items: center; gap: 6px; flex: none; padding: 10px 14px; border: 0; border-radius: 12px; font-weight: 700; white-space: nowrap; }
+.welcome-ask button:disabled { opacity: 0.45; cursor: default; }
+.soft-btn { background: var(--panel); color: var(--text); }
+.ai-btn { color: #fff; background: linear-gradient(90deg, #7c5cff, #ff7ab8); }
+.welcome-sub { margin: 26px 0 12px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+.templates { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.templates button { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 16px 10px; background: #fff; border: 1px solid var(--line); border-radius: 16px; transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s; }
+.templates button:hover:not(:disabled) { transform: translateY(-2px); border-color: var(--accent); box-shadow: 0 8px 22px rgba(60, 30, 160, 0.1); }
+.templates .emoji { font-size: 1.7rem; }
+.templates b { font-size: 0.88rem; font-weight: 600; }
 
 /* ---- mobile ---- */
 @media (max-width: 860px) {
@@ -353,6 +402,10 @@ button svg { display: block; flex: none; }
   .todo { padding: 18px 14px 40px; }
   .todo-hero h1 { font-size: 1.5rem; }
   .cards { grid-template-columns: 1fr; }
+  .templates { grid-template-columns: repeat(2, 1fr); }
+  .welcome-ask { flex-wrap: wrap; }
+  .welcome-ask input { flex-basis: 100%; }
+  .welcome-ask button { flex: 1; justify-content: center; }
   .team { padding: 18px; }
   .team footer { flex-direction: column; }
   .toast { max-width: calc(100% - 24px); text-align: center; }

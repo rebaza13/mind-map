@@ -1,4 +1,4 @@
-// Mindbloom assistant. The browser sends the chat message plus the current map;
+// Mindbloom assistant. The browser sends the chat message, any attached files/images, plus the current map;
 // the model answers with edit operations that the browser applies and saves.
 // Uses Google Gemini (free tier) when GEMINI_API_KEY is set, otherwise Claude when ANTHROPIC_API_KEY is set.
 import { createClient } from 'npm:@supabase/supabase-js@2'
@@ -13,14 +13,35 @@ const json = (b: unknown, status = 200) =>
 
 const OPS = ['add', 'rename', 'done', 'notes', 'delete']
 const SYSTEM = (name: string, outline: string) =>
-  `You are the assistant inside Mindbloom, a mind-map / to-do app. The user talks to you in plain text and you build and edit their map for them. Respond with a short friendly "reply" and a list of "ops". Keep node titles short (2-6 words). Prefer organised branches with subtasks. Only touch existing nodes when asked. Never delete the root node (the one with parent=none).\n\nOps: {op:"add", id:<parent node id or a ref from an earlier add>, ref:<optional temp name for nesting>, title, notes?}, {op:"rename", id, title}, {op:"done", id, done}, {op:"notes", id, notes}, {op:"delete", id}.\n\nCurrent map "${name}":\n${outline}`
+  `You are the assistant inside Mindbloom, a mind-map / to-do app. You are a sharp planner and thinker: you turn goals, documents, screenshots, photos, notes and messy ideas into clear, well-organised maps, and you answer questions about the map or the attached files.
 
-async function gemini(key: string, system: string, history: any[], message: string) {
+How to work:
+- Read every attached file or image carefully. If the user attaches something without saying what to do, summarise it into a useful branch (key points, tasks, deadlines, people, numbers).
+- Plan properly: break big goals into 3-7 branches, each with concrete, actionable subtasks (go 2-4 levels deep when it helps). Put details, steps, links, amounts and dates in "notes", keep titles short (2-6 words).
+- Only change existing nodes when asked. Never delete the root node (parent=none). Use the real ids from the map below.
+- If the user only asks a question, answer it in "reply" and return no ops.
+- "reply" is plain text (no markdown symbols), friendly and concise; say what you built or changed. Answer in the user's language.
+
+Ops: {op:"add", id:<parent node id or a ref from an earlier add>, ref:<optional temp name so later adds can nest under it>, title, notes?}, {op:"rename", id, title}, {op:"done", id, done}, {op:"notes", id, notes}, {op:"delete", id}.
+
+Current map "${name}" (id | parent | status title | notes):
+${outline}`
+
+// Attachments arrive as {name, type, data} (base64) for images and PDFs, or {name, type, text} for text files.
+type Attachment = { name: string; type: string; data?: string; text?: string }
+const fileText = (f: Attachment) => `Attached file "${f.name}":
+${f.text}`
+
+async function gemini(key: string, system: string, history: any[], message: string, files: Attachment[]) {
+  const parts = [
+    ...files.map((f) => f.text != null ? { text: fileText(f) } : { inline_data: { mime_type: f.type, data: f.data } }),
+    { text: message },
+  ]
   const body = JSON.stringify({
       systemInstruction: { parts: [{ text: system }] },
       contents: [
-        ...history.slice(-10).map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
-        { role: 'user', parts: [{ text: message }] },
+        ...history.slice(-20).map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
+        { role: 'user', parts },
       ],
       generationConfig: {
         responseMimeType: 'application/json',
@@ -63,10 +84,16 @@ async function gemini(key: string, system: string, history: any[], message: stri
   if (res.status === 503 || res.status === 429) throw new Error('The free AI is busy right now. Please try again in a minute.')
   if (!res.ok) throw new Error(`Gemini ${res.status}: ${(await res.text()).slice(0, 300)}`)
   const out = await res.json()
-  return JSON.parse(out.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}')
+  const outParts = out.candidates?.[0]?.content?.parts ?? []
+  return JSON.parse(outParts.filter((p: any) => !p.thought).map((p: any) => p.text ?? '').join('') || '{}')
 }
 
-async function claude(key: string, system: string, history: any[], message: string) {
+async function claude(key: string, system: string, history: any[], message: string, files: Attachment[]) {
+  const content = [
+    ...files.map((f) => f.text != null ? { type: 'text', text: fileText(f) }
+      : { type: f.type === 'application/pdf' ? 'document' : 'image', source: { type: 'base64', media_type: f.type, data: f.data } }),
+    { type: 'text', text: message },
+  ]
   const tool = {
     name: 'edit_map',
     description: 'Reply to the user and apply edits to their mind map.',
@@ -93,8 +120,8 @@ async function claude(key: string, system: string, history: any[], message: stri
     method: 'POST',
     headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
     body: JSON.stringify({
-      model: 'claude-sonnet-5-5', max_tokens: 2000, system, tools: [tool], tool_choice: { type: 'tool', name: 'edit_map' },
-      messages: [...history.slice(-10), { role: 'user', content: message }],
+      model: 'claude-sonnet-5-5', max_tokens: 8000, system, tools: [tool], tool_choice: { type: 'tool', name: 'edit_map' },
+      messages: [...history.slice(-20), { role: 'user', content }],
     }),
   })
   if (!res.ok) throw new Error(`Claude API ${res.status}: ${(await res.text()).slice(0, 300)}`)
@@ -117,12 +144,14 @@ Deno.serve(async (req) => {
     return json({ error: 'No AI key is set on the server yet (GEMINI_API_KEY).' }, 500)
   }
 
-  const { message, history = [], nodes = [], mapName = '' } = await req.json()
-  const outline = nodes.map((n: any) => `${n.id} | parent=${n.parent_id ?? 'none'} | ${n.done ? '[x]' : '[ ]'} ${n.title}`).join('\n')
+  const { message = '', history = [], nodes = [], mapName = '', files = [] } = await req.json()
+  const outline = nodes.map((n: any) =>
+    `${n.id} | parent=${n.parent_id ?? 'none'} | ${n.done ? '[x]' : '[ ]'} ${n.title}${n.notes ? ` | ${String(n.notes).slice(0, 200).replace(/\n/g, ' ')}` : ''}`).join('\n')
+  const text = message || 'Look at the attached file(s) and add what matters to my map.'
   const system = SYSTEM(mapName, outline)
 
   try {
-    const out = geminiKey ? await gemini(geminiKey, system, history, message) : await claude(claudeKey!, system, history, message)
+    const out = geminiKey ? await gemini(geminiKey, system, history, text, files) : await claude(claudeKey!, system, history, text, files)
     return json({ reply: out.reply ?? 'Done.', ops: out.ops ?? [] })
   } catch (e) {
     return json({ error: String((e as Error).message ?? e) }, 502)

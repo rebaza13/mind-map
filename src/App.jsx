@@ -6,6 +6,7 @@ import TodoView from './TodoView'
 import Avatar from './Avatar'
 import Team, { WsSwitch } from './Team'
 import Icon from './Icon'
+import Welcome from './Welcome'
 import { downloadHtml, printPdf } from './exportMap'
 import { PALETTE, descendants, layout, nodeW, parseOutline, pickColor, AI_PROMPT } from './tree'
 
@@ -33,6 +34,9 @@ export default function App() {
 
 function Workspace({ user }) {
   const [maps, setMaps] = useState([])
+  const [mapsReady, setMapsReady] = useState(false)
+  const [loadedMap, setLoadedMap] = useState(null) // the map whose nodes are in `nodes`
+  const pendingAsk = useRef(null) // {mapId, text, files}: sent to the AI once a new map has loaded
   const [mapId, setMapId] = useState(null)
   const [nodes, setNodes] = useState([])
   const [sel, setSel] = useState(null)
@@ -98,36 +102,50 @@ function Workspace({ user }) {
 
   const loadMaps = useCallback(async () => {
     if (!wsId) return
-    let { data, error } = await supabase.from('maps').select('*').eq('workspace_id', wsId).order('created_at')
+    const { data, error } = await supabase.from('maps').select('*').eq('workspace_id', wsId).order('created_at')
     if (error) return say(error.message)
-    if (!data.length) {
-      const { data: m, error: e2 } = await supabase.from('maps').insert({ name: 'My first map', workspace_id: wsId }).select().single()
-      if (e2) return say(e2.message)
-      await supabase.from('nodes').insert({ map_id: m.id, title: 'My mind', color: PALETTE[0] })
-      data = [m]
-    }
     setMaps(data)
-    setMapId(data[0].id)
+    setMapId(data[0]?.id ?? null)
+    setMapsReady(true)
   }, [wsId])
 
   useEffect(() => { loadWorkspaces() }, [loadWorkspaces])
   useEffect(() => {
     if (!wsId) return
     localStorage.setItem('mindbloom.ws', wsId)
-    setMaps([]); setMapId(null); setNodes([]); setSel(null)
+    setMaps([]); setMapId(null); setNodes([]); setSel(null); setMapsReady(false)
     loadMaps()
     loadMembers()
   }, [wsId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (mapId && maps.length && !maps.some((m) => m.id === mapId)) setMapId(maps[0].id) // our map was deleted elsewhere
+    if (!maps.some((m) => m.id === mapId)) setMapId(maps[0]?.id ?? null) // our map was deleted elsewhere, or one appeared
   }, [maps, mapId])
 
   useEffect(() => {
-    if (!mapId) return
     setSel(null)
-    supabase.from('nodes').select('*').eq('map_id', mapId).then(({ data, error }) => (fail(error), setNodes(data || [])))
+    setLoadedMap(null)
+    if (!mapId) return setNodes([])
+    let live = true
+    supabase.from('nodes').select('*').eq('map_id', mapId).then(({ data, error }) => {
+      if (!live) return
+      fail(error)
+      setNodes(data || [])
+      setLoadedMap(mapId)
+    })
+    return () => { live = false }
   }, [mapId])
+
+  // A map created with "Build with AI" (or from the chat with no map open) gets its prompt once its nodes are loaded.
+  useEffect(() => {
+    const p = pendingAsk.current
+    if (!p || loadedMap !== p.mapId) return
+    pendingAsk.current = null
+    setChatOpen(true)
+    askClaude(p.text, p.files)
+  }, [loadedMap]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { if (maps.length) localStorage.setItem('mindbloom.hadMap', '1') }, [maps.length])
 
   mapRef.current = mapId
   selRef.current = sel
@@ -230,6 +248,8 @@ function Workspace({ user }) {
     setSel(row.id)
   }
 
+  const addRoot = () => insertRows([makeNode(null, maps.find((m) => m.id === mapId)?.name || 'My mind')])
+
   const removeNode = (id) => {
     const n = nodes.find((x) => x.id === id)
     if (!n) return
@@ -286,16 +306,17 @@ function Workspace({ user }) {
   }
 
   // ---- Claude: send the map + message to the edge function, apply the edits it returns ----
-  const askClaude = async (text) => {
-    const history = msgs.map((m) => ({ role: m.role, content: m.text }))
-    setMsgs((m) => [...m, { role: 'user', text }])
+  const askClaude = async (text, files = []) => {
+    const history = msgs.map((m) => ({ role: m.role, content: m.files?.length ? `${m.text}\n[attached: ${m.files.map((f) => f.name).join(', ')}]` : m.text }))
+    setMsgs((m) => [...m, { role: 'user', text, files: files.map(({ name, preview }) => ({ name, preview })) }])
     setThinking(true)
     const { data, error } = await supabase.functions.invoke('claude-map', {
       body: {
         message: text,
+        files: files.map(({ name, type, data, text }) => ({ name, type, data, text })),
         history,
         mapName: maps.find((m) => m.id === mapId)?.name,
-        nodes: nodes.map(({ id, parent_id, title, done }) => ({ id, parent_id, title, done })),
+        nodes: nodes.map(({ id, parent_id, title, done, notes }) => ({ id, parent_id, title, done, notes })),
       },
     })
     setThinking(false)
@@ -307,12 +328,16 @@ function Workspace({ user }) {
   }
 
   // Pasted lists ("- Parent" / "  - child") are built directly; anything else goes to the AI.
-  const chatSend = async (text) => {
-    if (text.includes('\n') || /^[-*•]\s/.test(text)) {
+  const chatSend = async (text, files = []) => {
+    if (!mapId) {
+      const name = (text || files[0]?.name || 'New map').replace(/\s+/g, ' ').slice(0, 48)
+      return createMap(name, { prompt: text, files })
+    }
+    if (!files.length && (text.includes('\n') || /^[-*•]\s/.test(text))) {
       setMsgs((m) => [...m, { role: 'user', text: '(pasted outline)' }])
       await runCommand(text)
       setMsgs((m) => [...m, { role: 'assistant', text: 'Added it to your map.' }])
-    } else askClaude(text)
+    } else askClaude(text, files)
   }
 
   const applyOps = async (ops) => {
@@ -344,25 +369,44 @@ function Workspace({ user }) {
     e?.preventDefault()
     const name = (newName || '').trim()
     setNewName(null)
-    if (!name) return
+    if (name) createMap(name)
+  }
+
+  // New map with its centre node, optionally pre-filled from an outline or handed to the AI.
+  const createMap = async (name, { outline, prompt, files } = {}) => {
     const { data: m, error } = await supabase.from('maps').insert({ name, workspace_id: wsId }).select().single()
     if (error) return fail(error)
-    await supabase.from('nodes').insert({ map_id: m.id, title: name, color: PALETTE[0] })
+    const root = { id: crypto.randomUUID(), map_id: m.id, title: name, color: PALETTE[0], position: 0 }
+    const rows = [root]
+    if (outline) {
+      const stack = [root]
+      const counts = new Map()
+      for (const it of parseOutline(outline)) {
+        const d = Math.min(it.depth, stack.length - 1)
+        const parent = stack[d]
+        const n = counts.get(parent.id) || 0
+        counts.set(parent.id, n + 1)
+        const row = { id: crypto.randomUUID(), map_id: m.id, parent_id: parent.id, title: it.title, color: pickColor(parent, n), position: n }
+        rows.push(row)
+        stack[d + 1] = row
+        stack.length = d + 2
+      }
+    }
+    const { error: e2 } = await supabase.from('nodes').insert(rows)
+    if (e2) return fail(e2)
+    if (prompt || files?.length) pendingAsk.current = { mapId: m.id, text: prompt, files: files || [] }
     setMaps((ms) => (ms.some((x) => x.id === m.id) ? ms : [...ms, m]))
     setMapId(m.id)
+    setView('map')
+    setMenuOpen(false)
   }
 
   const deleteMap = async (id) => {
     const { error } = await supabase.from('maps').delete().eq('id', id)
     if (error) return fail(error)
     const rest = maps.filter((m) => m.id !== id)
-    if (!rest.length) { // deleting the last map leaves a fresh empty one
-      const { data: m } = await supabase.from('maps').insert({ name: 'My first map', workspace_id: wsId }).select().single()
-      await supabase.from('nodes').insert({ map_id: m.id, title: 'My mind', color: PALETTE[0] })
-      setMaps([m]); setMapId(m.id); return
-    }
     setMaps(rest)
-    if (id === mapId) setMapId(rest[0].id)
+    if (id === mapId) setMapId(rest[0]?.id ?? null)
   }
 
   const renameMap = async (id, name) => {
@@ -430,6 +474,7 @@ function Workspace({ user }) {
           {newName !== null && (
             <form onSubmit={newMap}><input autoFocus placeholder="Name it, then Enter" value={newName} onChange={(e) => setNewName(e.target.value)} onBlur={() => !newName.trim() && setNewName(null)} /></form>
           )}
+          {mapsReady && !maps.length && newName === null && <p className="list-empty">No maps yet. Make one to get started.</p>}
           {maps.map((m) => (
             <div key={m.id} className={`item ${m.id === mapId ? 'on' : ''}`}>
               {renaming === m.id ? (
@@ -446,8 +491,8 @@ function Workspace({ user }) {
         </div>
 
         <div className="export-row">
-          <button className="soft" onClick={() => downloadHtml(maps.find((m) => m.id === mapId)?.name || 'map', nodes, pos)}><Icon name="down" size={15} /> HTML</button>
-          <button className="soft" onClick={() => printPdf(maps.find((m) => m.id === mapId)?.name || 'map', nodes, pos) || say('Allow pop-ups to export PDF.')}><Icon name="down" size={15} /> PDF</button>
+          <button className="soft" disabled={!nodes.length} onClick={() => downloadHtml(maps.find((m) => m.id === mapId)?.name || 'map', nodes, pos)}><Icon name="down" size={15} /> HTML</button>
+          <button className="soft" disabled={!nodes.length} onClick={() => printPdf(maps.find((m) => m.id === mapId)?.name || 'map', nodes, pos) || say('Allow pop-ups to export PDF.')}><Icon name="down" size={15} /> PDF</button>
           {installEvt && <button className="soft install" onClick={() => { installEvt.prompt(); setInstallEvt(null) }}><Icon name="plus" size={15} /> Install</button>}
         </div>
         <div className="me">
@@ -462,8 +507,8 @@ function Workspace({ user }) {
       <main className="main">
         <header className="bar">
           <button className="menu-btn" title="Menu" onClick={() => setMenuOpen(true)}><Icon name="menu" size={20} /></button>
-          <h2>{maps.find((m) => m.id === mapId)?.name}</h2>
-          <div className="seg">
+          <h2>{maps.find((m) => m.id === mapId)?.name ?? (mapsReady && !maps.length ? 'Mindbloom' : '')}</h2>
+          <div className="seg" hidden={!mapId}>
             <button className={view === 'map' ? 'on' : ''} onClick={() => setView('map')}>Mind map</button>
             <button className={view === 'todo' ? 'on' : ''} onClick={() => setView('todo')}>To-do</button>
           </div>
@@ -475,7 +520,16 @@ function Workspace({ user }) {
           <button className="claude-btn" onClick={() => setChatOpen(!chatOpen)}><Icon name="spark" size={16} /> <span className="lbl">Ask AI</span></button>
         </header>
 
-        {view === 'map' ? (
+        {!mapsReady ? (
+          <div className="loading"><span /><span /><span /></div>
+        ) : !maps.length ? (
+          <Welcome firstTime={!localStorage.getItem('mindbloom.hadMap')} onCreate={createMap} />
+        ) : loadedMap === mapId && !nodes.length ? (
+          <div className="map-empty">
+            <p>This map has no centre yet.</p>
+            <button className="primary" onClick={addRoot}><Icon name="plus" size={16} /> Add a centre idea</button>
+          </div>
+        ) : view === 'map' ? (
           <MapCanvas nodes={nodes} pos={pos} sel={sel} onSelect={setSel} onMove={moveNodes} onAddChild={addChild} onToggle={toggle} viewers={viewers} />
         ) : (
           <TodoView nodes={nodes} sel={sel} onSelect={setSel} onToggle={toggle} onAddChild={addChild} onPatch={patchNode} members={members} viewers={viewers} />
@@ -557,29 +611,92 @@ function Workspace({ user }) {
   )
 }
 
+// Attachments: images are shrunk and sent as JPEG, PDFs as-is, text/code files as text.
+const TEXT_EXT = /\.(txt|md|csv|tsv|json|xml|html?|css|jsx?|tsx?|py|java|c|cpp|cs|go|rs|rb|php|sql|ya?ml|toml|ini|log|sh)$/i
+const MAX_FILE = 10 * 1024 * 1024
+
+const toBase64 = (buf) => {
+  let s = ''
+  const b = new Uint8Array(buf)
+  for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000))
+  return btoa(s)
+}
+
+async function readAttachment(file) {
+  const name = file.name || 'pasted image'
+  if (file.type.startsWith('image/')) {
+    const img = await createImageBitmap(file)
+    const k = Math.min(1, 1600 / Math.max(img.width, img.height))
+    const c = document.createElement('canvas')
+    c.width = Math.round(img.width * k); c.height = Math.round(img.height * k)
+    const g = c.getContext('2d')
+    g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height)
+    g.drawImage(img, 0, 0, c.width, c.height)
+    const url = c.toDataURL('image/jpeg', 0.85)
+    return { name, type: 'image/jpeg', data: url.split(',')[1], preview: url }
+  }
+  if (file.size > MAX_FILE) throw new Error(`${name} is too big (max 10 MB).`)
+  if (file.type === 'application/pdf') return { name, type: file.type, data: toBase64(await file.arrayBuffer()) }
+  if (file.type.startsWith('text/') || TEXT_EXT.test(name)) return { name, type: 'text/plain', text: (await file.text()).slice(0, 200000) }
+  throw new Error(`${name}: only images, PDFs and text/code files can be attached.`)
+}
+
 function ClaudeChat({ msgs, thinking, onSend, onClose }) {
   const [text, setText] = useState('')
+  const [files, setFiles] = useState([])
+  const [fileErr, setFileErr] = useState('')
+  const [drag, setDrag] = useState(false)
   const [copied, setCopied] = useState(false)
   const end = useRef(null)
+  const picker = useRef(null)
   useEffect(() => { end.current?.scrollIntoView({ behavior: 'smooth' }) }, [msgs, thinking])
-  const send = (e) => { e?.preventDefault(); if (!text.trim() || thinking) return; onSend(text.trim()); setText('') }
+  const addFiles = async (list) => {
+    setFileErr('')
+    for (const f of list) {
+      try { const a = await readAttachment(f); setFiles((x) => [...x, a].slice(0, 8)) } catch (e) { setFileErr(e.message) }
+    }
+  }
+  const canSend = !thinking && (text.trim() || files.length)
+  const send = (e) => { e?.preventDefault(); if (!canSend) return; onSend(text.trim(), files); setText(''); setFiles([]); setFileErr('') }
   const copy = () => navigator.clipboard.writeText(AI_PROMPT).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) })
   return (
-    <div className="chatpanel">
+    <div className={`chatpanel${drag ? ' dragging' : ''}`}
+      onDragOver={(e) => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)}
+      onDrop={(e) => { e.preventDefault(); setDrag(false); addFiles([...e.dataTransfer.files]) }}>
       <div className="chat-head"><b><Icon name="spark" size={15} /> AI assistant</b><button onClick={onClose}><Icon name="x" size={16} /></button></div>
       <div className="chat-body">
         {!msgs.length && (
-          <p className="muted">Tell me what to build or change: “plan a trip to Japan”, “add a budget branch”, “mark design as done”. You can also paste an indented list and I will turn it into a map.</p>
+          <p className="muted">Tell me what to build or change: “plan a trip to Japan”, “add a budget branch”, “mark design as done”. Attach or paste screenshots, photos, PDFs or text files and I will turn them into tasks. You can also paste an indented list.</p>
         )}
-        {msgs.map((m, i) => <div key={i} className={`bubble ${m.role}`}>{m.text}</div>)}
+        {msgs.map((m, i) => (
+          <div key={i} className={`bubble ${m.role}`}>
+            {m.files?.length > 0 && <div className="bubble-files">{m.files.map((f, j) => f.preview ? <img key={j} src={f.preview} alt={f.name} /> : <span key={j} className="file-chip">{f.name}</span>)}</div>}
+            {m.text}
+          </div>
+        ))}
         {thinking && <div className="bubble assistant">Thinking…</div>}
         <div ref={end} />
       </div>
       <button className="prompt-link" type="button" onClick={copy}>{copied ? 'Copied ✓' : 'Copy a prompt for ChatGPT or other AI'}</button>
+      {(files.length > 0 || fileErr) && (
+        <div className="attach-row">
+          {files.map((f, i) => (
+            <span key={i} className="file-chip">
+              {f.preview ? <img src={f.preview} alt="" /> : null}{f.name}
+              <button type="button" title="Remove" onClick={() => setFiles((x) => x.filter((_, j) => j !== i))}><Icon name="x" size={12} /></button>
+            </span>
+          ))}
+          {fileErr && <span className="file-err">{fileErr}</span>}
+        </div>
+      )}
       <form onSubmit={send}>
+        <button type="button" className="attach" title="Attach images, PDFs or files" onClick={() => picker.current?.click()}><Icon name="clip" size={16} /></button>
+        <input ref={picker} type="file" multiple hidden accept="image/*,application/pdf,text/*,.md,.csv,.json,.js,.jsx,.ts,.tsx,.py,.sql,.yml,.yaml,.log"
+          onChange={(e) => { addFiles([...e.target.files]); e.target.value = '' }} />
         <textarea rows={1} value={text} onChange={(e) => setText(e.target.value)} placeholder="Ask AI…"
+          onPaste={(e) => { const f = [...e.clipboardData.files]; if (f.length) { e.preventDefault(); addFiles(f) } }}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) send(e) }} />
-        <button disabled={thinking || !text.trim()}>Send</button>
+        <button disabled={!canSend}>Send</button>
       </form>
     </div>
   )
