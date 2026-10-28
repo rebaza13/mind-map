@@ -446,7 +446,7 @@ function Workspace({ user }) {
             {online.length > 5 && <span className="more">+{online.length - 5}</span>}
           </div>
           <button className="invite-btn" onClick={() => setShowTeam(true)}><Icon name="users" size={16} /> Invite</button>
-          <button className="claude-btn" onClick={() => setChatOpen(!chatOpen)}><Icon name="spark" size={16} /> Ask Claude</button>
+          <button className="claude-btn" onClick={() => setChatOpen(!chatOpen)}><Icon name="spark" size={16} /> Ask AI</button>
           <button className="ghost" onClick={() => downloadHtml(maps.find((m) => m.id === mapId)?.name || 'map', nodes, pos)}><Icon name="down" size={15} /> HTML</button>
           <button className="ghost" onClick={() => printPdf(maps.find((m) => m.id === mapId)?.name || 'map', nodes, pos) || say('Allow pop-ups to export PDF.')}><Icon name="down" size={15} /> PDF</button>
         </header>
@@ -561,14 +561,14 @@ function ClaudeChat({ msgs, thinking, onSend, onClose }) {
   const send = (e) => { e.preventDefault(); if (!text.trim() || thinking) return; onSend(text.trim()); setText('') }
   return (
     <div className="chatpanel">
-      <div className="chat-head"><b>✦ Claude</b><button onClick={onClose}><Icon name="x" size={16} /></button></div>
+      <div className="chat-head"><b>✦ AI assistant</b><button onClick={onClose}><Icon name="x" size={16} /></button></div>
       <div className="chat-body">
         {!msgs.length && <p className="muted">Tell me what to build or change. “Plan a trip to Japan”, “add a budget branch”, “mark design as done”…</p>}
         {msgs.map((m, i) => <div key={i} className={`bubble ${m.role}`}>{m.text}</div>)}
         {thinking && <div className="bubble assistant">Thinking…</div>}
         <div ref={end} />
       </div>
-      <form onSubmit={send}><input value={text} onChange={(e) => setText(e.target.value)} placeholder="Ask Claude…" /><button disabled={thinking || !text.trim()}>Send</button></form>
+      <form onSubmit={send}><input value={text} onChange={(e) => setText(e.target.value)} placeholder="Ask AI…" /><button disabled={thinking || !text.trim()}>Send</button></form>
     </div>
   )
 }
